@@ -116,11 +116,11 @@ public:
       m_screen->onWindowMove = [this, pos_param](QPointF pos) {
         if(const auto& w = m_screen->window())
         {
-          #if !defined(_WIN32)
+#if 0
           auto geom = w->geometry();
           pos_param->set_value(
               ossia::vec2f{float(pos.x()), float(pos.y())});
-          #endif
+#endif
         }
       };
       m_root.add_child(std::move(pos_node));
@@ -437,7 +437,9 @@ void WindowDevice::setupContextMenu(QMenu& menu) const
 void WindowDevice::disconnect()
 {
   DeviceInterface::disconnect();
+  auto prev = std::move(m_dev);
   m_dev = {};
+  deviceChanged(prev.get(), nullptr);
 }
 
 bool WindowDevice::reconnect()
@@ -454,6 +456,7 @@ bool WindowDevice::reconnect()
           std::unique_ptr<gfx_protocol_base>(m_protocol), m_settings.name.toStdString());
 
       enableCallbacks();
+      deviceChanged(nullptr, m_dev.get());
     }
     // TODOengine->reload(&proto);
 
