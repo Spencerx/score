@@ -11,6 +11,7 @@
 
 #include <score/application/GUIApplicationContext.hpp>
 #include <score/command/Dispatchers/CommandDispatcher.hpp>
+#include <score/selection/SelectionDispatcher.hpp>
 
 #include <wobjectimpl.h>
 
@@ -63,7 +64,9 @@ void LayerPresenter::handlePresetDrop(const QPointF&, const QMimeData& mime)
 
 void LayerPresenter::requestFocus()
 {
-  m_context.context.focusDispatcher.focus(this);
+  if(this->m_process.flags() & Process::ProcessFlags::ItemRequiresUniqueFocus)
+    m_context.context.focusDispatcher.focus(this);
+  score::SelectionDispatcher{m_context.context.selectionStack}.select(m_process);
 }
 
 bool LayerPresenter::focused() const

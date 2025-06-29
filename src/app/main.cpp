@@ -28,6 +28,8 @@ extern "C" void sincos(double x, double* sin, double* cos)
   *cos = std::cos(x);
 }
 #endif
+
+#include <winrt/Windows.Foundation.h>
 #endif
 // clang-format on
 
@@ -116,7 +118,7 @@ void disableAppRestore()
 void ensureDyldPath()
 {
   auto e = qEnvironmentVariable("DYLD_LIBRARY_PATH");
-  if(e.isEmpty())
+  if(e.isEmpty() || e == "/usr/lib/system/introspection")
   {
     return;
   }
@@ -130,7 +132,7 @@ void ensureDyldPath()
         "uncheck the 'Add library search path to DYLD_LIBRARY_PATH and "
         "DYLD_FRAMEWORK_PATH'\n"
         "checkbox on the execution tab.\n\n"
-        "Current DYLD_LIBRARY_PATH: %s",
+        "Current DYLD_LIBRARY_PATH: '%s'\n",
         e.toStdString().c_str());
 
     // If you see this comment, you are allowed to remove it on your dev
@@ -237,17 +239,10 @@ static void setup_suil()
   // nrelative to the executable
   if(qEnvironmentVariableIsEmpty("SUIL_MODULE_DIR"))
   {
-    auto path = ossia::get_exe_path();
-    auto last_slash =
-#if defined(_WIN32)
-        path.find_last_of('\\');
-#else
-        path.find_last_of('/');
-#endif
-    if(last_slash == std::string::npos)
+    auto path = ossia::get_exe_folder();
+    if(path.empty())
       return;
 
-    path = path.substr(0, last_slash);
     if(path.ends_with("/bin"))
       path.resize(path.size() - 3);
 
@@ -389,17 +384,9 @@ static void setup_faust_path()
   if(!qEnvironmentVariableIsEmpty("FAUST_LIB_PATH"))
     return;
 
-  auto path = ossia::get_exe_path();
-  auto last_slash =
-#if defined(_WIN32)
-      path.find_last_of('\\');
-#else
-      path.find_last_of('/');
-#endif
-  if(last_slash == std::string::npos)
+  auto path = ossia::get_exe_folder();
+  if(path.empty())
     return;
-
-  path = path.substr(0, last_slash);
 
 #if defined(SCORE_DEPLOYMENT_BUILD)
 #if defined(__APPLE__)
@@ -662,6 +649,11 @@ struct failsafe
 
 int main(int argc, char** argv)
 {
+#if defined(_WIN32)
+  winrt::uninit_apartment();
+  winrt::init_apartment(winrt::apartment_type::single_threaded);
+#endif
+
   struct failsafe failsafe;
 
 #if defined(__APPLE__)
@@ -683,6 +675,11 @@ int main(int argc, char** argv)
 
   QPixmapCache::setCacheLimit(819200);
   Application app(argc, argv);
+
+#if defined(_WIN32)
+  winrt::uninit_apartment();
+  winrt::init_apartment(winrt::apartment_type::single_threaded);
+#endif
 
   setup_gdk();
 
