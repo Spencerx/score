@@ -71,6 +71,7 @@ Gfx::Settings::GraphicsApis::operator QStringList() const noexcept
 #endif
 
 #if defined(Q_OS_MACOS) || defined(Q_OS_IOS)
+  // https://github.com/ossia/score/issues/1807
   lst += Metal;
 #endif
   return lst;
@@ -131,6 +132,11 @@ score::gfx::GraphicsApi Model::graphicsApiEnum() const noexcept
     return score::gfx::OpenGL;
   else if(platform == "vkkhrdisplay")
     return score::gfx::Vulkan;
+
+  // https://github.com/ossia/score/issues/1807
+#if defined(Q_OS_MACOS) || defined(Q_OS_IOS)
+  return score::gfx::Metal;
+#endif
 
   if(m_GraphicsApi == apis.Vulkan)
   {

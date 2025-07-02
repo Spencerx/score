@@ -1122,10 +1122,17 @@ void prepareNewState(Node_T& eff, const Node& parent)
 
   if constexpr(avnd::can_prepare<Node_T>)
   {
-    using prepare_type = avnd::first_argument<&Node_T::prepare>;
-    prepare_type t;
-    if_possible(t.instance = parent.instance);
-    eff.prepare(t);
+    if constexpr(avnd::function_reflection<&Node_T::prepare>::count == 1)
+    {
+      using prepare_type = avnd::first_argument<&Node_T::prepare>;
+      prepare_type t;
+      if_possible(t.instance = parent.instance);
+      eff.prepare(t);
+    }
+    else
+    {
+      eff.prepare();
+    }
   }
 }
 
@@ -1230,11 +1237,12 @@ inline void initGfxPorts(auto* self, auto& input, auto& output)
   });
 }
 
-inline void inplaceMirror(unsigned char* bytes, int width, int height)
+inline void
+inplaceMirror(unsigned char* bytes, int width, int height, int bytes_per_pixel)
 {
   if(width < 1 || height <= 1)
     return;
-  const size_t row_size = width * 4;
+  const size_t row_size = width * bytes_per_pixel;
 
   auto temp_row = (unsigned char*)alloca(row_size);
   auto top = bytes;

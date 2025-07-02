@@ -112,7 +112,8 @@ void NodeItem::createWithDecorations()
       = new score::QGraphicsPixmapToggle{pixmaps.unroll_small, pixmaps.roll_small, this};
   m_fold->setState(!startFolded);
 
-  m_uiButton = Process::makeExternalUIButton(process, ctx, this, this);
+  m_uiButton = Process::makeExternalUIButton(
+      const_cast<Process::ProcessModel&>(process), ctx, this, this);
   m_presetButton = Process::makePresetButton(process, ctx, this, this);
 
   auto& skin = score::Skin::instance();
@@ -657,10 +658,12 @@ void NodeItem::mousePressEvent(QGraphicsSceneMouseEvent* event)
     nodeItemInteraction = Interaction::Move;
   }
 
-  if(m_presenter)
+  if(m_presenter && m_model.flags() & Process::ProcessFlags::ItemRequiresUniqueFocus)
+  {
     m_context.focusDispatcher.focus(m_presenter);
-
+  }
   score::SelectionDispatcher{m_context.selectionStack}.select(m_model);
+
   event->accept();
 }
 namespace
