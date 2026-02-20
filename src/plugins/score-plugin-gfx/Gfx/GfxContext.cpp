@@ -443,6 +443,10 @@ void GfxContext::run_commands()
     }
   }
 
+  for(auto& node : nursery)
+  {
+    ossia::remove_erase(add_output, node.get());
+  }
   for(auto* out : add_output)
     add_preview_output(*safe_cast<score::gfx::OutputNode*>(out));
   if(recompute)
