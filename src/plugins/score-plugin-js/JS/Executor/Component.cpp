@@ -367,7 +367,8 @@ Component::on_gpuScriptChange(const QString& script, Execution::Transaction& com
   // Send the updates to the node
   auto recable = std::shared_ptr<ossia::recabler>(
       new ossia::recabler{node, system().execGraph, inls, outls});
-  commands.push_back([node, script, controls, recable, st = std::make_unique<JS::JSState>(process().state())]() mutable {
+  commands.push_back([node, root = process().rootPath(), script, controls, recable,
+                      st = std::make_unique<JS::JSState>(process().state())]() mutable {
     using namespace std;
     // Note: we need to do this because we try to keep the Javascript node around
     // because it's slow to recreate.
@@ -375,7 +376,7 @@ Component::on_gpuScriptChange(const QString& script, Execution::Transaction& com
     // process and entirely recreate a new node, + call update node.
     (*recable)();
 
-    node->setScript(std::move(script), std::move(*st));
+    node->setScript(root, std::move(script), std::move(*st));
 
     swap(node->controls, controls);
   });
@@ -515,15 +516,16 @@ Component::on_cpuScriptChange(const QString& script, Execution::Transaction& com
   // Send the updates to the node
   auto recable = std::shared_ptr<ossia::recabler>(
       new ossia::recabler{node, system().execGraph, inls, outls});
-  commands.push_back([node, script, recable, st = process().state()]() mutable {
+  commands.push_back([node, path = process().rootPath(), script, recable,
+                      st = std::make_unique<JS::JSState>(process().state())]() mutable {
     // Note: we need to do this because we try to keep the Javascript node around
     // because it's slow to recreate.
     // But this causes a lot of problems, it'd be better to do like e.g. the faust
     // process and entirely recreate a new node, + call update node.
     (*recable)();
 
-    node->m_modelState = std::move(st);
-    node->setScript(std::move(script));
+    node->m_modelState = std::move(*st);
+    node->setScript(path, std::move(script));
   });
 
   SCORE_ASSERT(process().inlets().size() == inls.size());

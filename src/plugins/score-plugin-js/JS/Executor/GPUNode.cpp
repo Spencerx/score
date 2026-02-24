@@ -54,11 +54,8 @@ struct GpuNode : score::gfx::NodeModel
 {
 public:
   explicit GpuNode(
-      QObject* uiContext,
-      JS::JSState&& st,
-      const QString& source,
-      const ossia::inlets& ins,
-      const ossia::outlets& outs);
+      QObject* uiContext, JS::JSState&& st, const QString& root, const QString& source,
+      const ossia::inlets& ins, const ossia::outlets& outs);
   virtual ~GpuNode();
 
   score::gfx::NodeRenderer*
@@ -69,6 +66,7 @@ public:
 
   QPointer<QObject> m_uiContext;
   JS::JSState m_modelState;
+  QString m_root;
   QString source;
   std::atomic_int64_t sourceIndex{};
 
@@ -519,11 +517,11 @@ void main ()
 };
 
 GpuNode::GpuNode(
-    QObject* uiContext,
-    JS::JSState&& st,
-    const QString& source, const ossia::inlets& ins, const ossia::outlets& outs)
+    QObject* uiContext, JS::JSState&& st, const QString& root, const QString& source,
+    const ossia::inlets& ins, const ossia::outlets& outs)
     : m_uiContext{uiContext}
     , m_modelState{std::move(st)}
+    , m_root{root}
     , source{source}
     , sourceIndex{1}
 {
@@ -741,7 +739,8 @@ void GpuNode::Engine::updateItemTextureOut(QQuickWindow* window)
 void GpuNode::Engine::createItem(GpuRenderer& renderer, GpuNode& node)
 {
   m_component = new QQmlComponent{this->m_engine.get()};
-  m_component->setData(node.source.toUtf8(), QUrl{});
+
+  m_component->setData(node.source.toUtf8(), QUrl::fromLocalFile(node.m_root));
   if(m_component->isError())
   {
     qDebug() << m_component->errorString();
@@ -841,14 +840,16 @@ std::string gpu_exec_node::label() const noexcept
   return "JS::gpu_exec_node";
 }
 
-void gpu_exec_node::setScript(const QString& str, JS::JSState&& new_state)
+void gpu_exec_node::setScript(
+    const QString& root, const QString& str, JS::JSState&& new_state)
 {
   exec_context->ui->unregister_node(id);
 
   //if(id < 0)
   {
-    auto n
-        = std::make_unique<JS::GpuNode>(m_context, std::move(new_state), str, this->root_inputs(), this->root_outputs());
+    auto n = std::make_unique<JS::GpuNode>(
+        m_context, std::move(new_state), root, str, this->root_inputs(),
+        this->root_outputs());
 
     {
       auto& element = *m_context;

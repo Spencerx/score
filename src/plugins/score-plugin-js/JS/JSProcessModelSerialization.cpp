@@ -27,7 +27,9 @@ void DataStreamWriter::write(JS::QmlSource& p)
 template <>
 void DataStreamReader::read(const JS::ProcessModel& proc)
 {
-  m_stream << proc.m_program << proc.m_state;
+  auto& ctx = score::IDocument::documentContext(proc);
+  m_stream << proc.m_program << proc.m_state
+           << score::relativizeFilePath(proc.m_root, ctx);
 
   readPorts(*this, proc.m_inlets, proc.m_outlets);
 
@@ -39,7 +41,12 @@ void DataStreamWriter::write(JS::ProcessModel& proc)
 {
   JS::QmlSource str;
   JS::JSState st;
-  m_stream >> str >> st;
+  m_stream >> str >> st >> proc.m_root;
+  if(!proc.m_root.isEmpty())
+  {
+    auto& ctx = score::IDocument::documentContext(proc);
+    proc.m_root = score::locateFilePath(proc.m_root, ctx);
+  }
   proc.setState(st);
   (void)proc.setProgram(str);
 
@@ -58,6 +65,11 @@ void JSONReader::read(const JS::ProcessModel& proc)
     obj["Ui"] = ui;
   if(const auto& st = proc.state(); !st.empty())
     obj["State"] = st;
+  if(const auto& r = proc.m_root; !r.isEmpty())
+  {
+    auto& ctx = score::IDocument::documentContext(proc);
+    obj["Root"] = score::relativizeFilePath(proc.m_root, ctx);
+  }
   readPorts(*this, proc.m_inlets, proc.m_outlets);
 }
 
@@ -73,6 +85,16 @@ void JSONWriter::write(JS::ProcessModel& proc)
 
   if(auto json_st = obj.tryGet("State"))
     st <<= *json_st;
+
+  if(auto json_r = obj.tryGet("Root"))
+  {
+    proc.m_root <<= *json_r;
+    if(!proc.m_root.isEmpty())
+    {
+      auto& ctx = score::IDocument::documentContext(proc);
+      proc.m_root = score::locateFilePath(proc.m_root, ctx);
+    }
+  }
 
   proc.setState(st);
   (void)proc.setProgram(p);

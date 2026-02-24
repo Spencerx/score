@@ -133,6 +133,7 @@ public:
 
   ~ProcessModel() override;
 
+  const QString& rootPath() const noexcept { return m_root; }
   bool validate(const std::vector<QString>& str) const noexcept;
   void errorMessage(const QString& arg_2) const
       W_SIGNAL(errorMessage, arg_2);
@@ -140,7 +141,6 @@ public:
   const QmlSource& program() const noexcept { return m_program; }
   [[nodiscard]] Process::ScriptChangeResult setProgram(const QmlSource& f);
   void programChanged() W_SIGNAL(programChanged);
-
 
   void uiToExecution(const QVariant& v) W_SIGNAL(uiToExecution, v);
   void executionToUi(const QVariant& v) W_SIGNAL(executionToUi, v);
@@ -155,6 +155,7 @@ private:
   Process::Preset savePreset() const noexcept override;
   Process::ScriptChangeResult setQmlData(const QByteArray&, bool isFile);
 
+  QString m_root;
   QmlSource m_program;
   QByteArray m_qmlData;
 

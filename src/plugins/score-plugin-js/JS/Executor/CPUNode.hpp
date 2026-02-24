@@ -40,7 +40,7 @@ public:
   void run(const ossia::token_request& t, ossia::exec_state_facade) noexcept override;
   void clear() noexcept override;
   void setupComponent();
-  void setScript(const QString& val);
+  void setScript(const QString& rootPath, const QString& val);
 
   ossia::execution_state& m_st;
 

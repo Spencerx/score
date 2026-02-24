@@ -17,7 +17,7 @@ public:
 
   std::string label() const noexcept override;
 
-  void setScript(const QString& str, JS::JSState&& new_state);
+  void setScript(const QString& root, const QString& str, JS::JSState&& new_state);
 
 private:
   QPointer<JS::ProcessModel> m_context{};

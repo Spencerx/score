@@ -39,8 +39,73 @@ static inline QString hashFileData(const QByteArray& str)
 #endif
   return hexName;
 }
+#include <QDir>
+#include <QFile>
+#include <QFileInfo>
+#include <QString>
 
-inline void loadJSObjectFromString(const QByteArray& str, QQmlComponent& comp, bool is_ui)
+inline bool copyDirectoryRecursively(const QString& sourcePath, const QString& destPath)
+{
+  QDir sourceDir(sourcePath);
+  if(!sourceDir.exists())
+  {
+    return false;
+  }
+
+  QDir destDir(destPath);
+  // Create the destination directory if it doesn't exist
+  if(!destDir.exists() && !destDir.mkpath("."))
+  {
+    return false;
+  }
+
+  bool success = true;
+
+  // Get all files and directories, including hidden and system files, excluding "." and ".."
+  const QFileInfoList entries = sourceDir.entryInfoList(
+      QDir::NoDotAndDotDot | QDir::AllEntries | QDir::Hidden | QDir::System);
+
+  for(const QFileInfo& entryInfo : entries)
+  {
+    QString newDestPath = destDir.absoluteFilePath(entryInfo.fileName());
+
+    if(entryInfo.isDir())
+    {
+      // Recursively copy subdirectories
+      if(!copyDirectoryRecursively(entryInfo.absoluteFilePath(), newDestPath))
+      {
+        success = false;
+      }
+    }
+    else
+    {
+      // Overwrite existing files at the destination
+      if(QFile::exists(newDestPath))
+      {
+        QFile::remove(newDestPath);
+      }
+      // Copy the file
+      if(!QFile::copy(entryInfo.absoluteFilePath(), newDestPath))
+      {
+        success = false;
+      }
+    }
+  }
+
+  return success;
+}
+
+inline bool copyParentFolderContents(const QString& rootPath, const QString& dst)
+{
+  QFileInfo fileInfo(rootPath);
+
+  QString parentFolder = fileInfo.absolutePath();
+
+  return copyDirectoryRecursively(parentFolder, dst);
+}
+
+inline void loadJSObjectFromString(
+    const QString& rootPath, const QByteArray& str, QQmlComponent& comp, bool is_ui)
 {
   static const auto& lib = score::AppContext().settings<Library::Settings::Model>();
 #if __has_include(<boost/hash2/xxh3.hpp>)
@@ -57,13 +122,18 @@ inline void loadJSObjectFromString(const QByteArray& str, QQmlComponent& comp, b
       f.flush();
       f.close();
     }
+    copyParentFolderContents(rootPath, cache_path);
+
     comp.loadUrl(QUrl::fromLocalFile(f.fileName()));
   }
   else
 #endif
   {
-    QString path = lib.getDefaultLibraryPath() + QDir::separator() + "Scripts"
-                   + QDir::separator() + "include" + QDir::separator() + "Script" + hashFileData(str) + ".qml";
+    QString path = rootPath;
+    if(path.isEmpty())
+      path = lib.getDefaultLibraryPath() + QDir::separator() + "Scripts"
+             + QDir::separator() + "include" + QDir::separator() + "Script"
+             + hashFileData(str) + ".qml";
     comp.setData(str, QUrl::fromLocalFile(path));
   }
 }
@@ -89,12 +159,14 @@ inline JS::Script* createJSObject(QQmlComponent& c, QQmlContext* context)
   }
 }
 
-inline JS::Script* createJSObject(const QString& val, QQmlEngine* engine, QQmlContext* context)
+inline JS::Script* createJSObject(
+    const QString& rootPath, const QString& val, QQmlEngine* engine,
+    QQmlContext* context)
 {
   if(val.trimmed().startsWith("import"))
   {
     QQmlComponent c{engine};
-    loadJSObjectFromString(val.toUtf8(), c, false);
+    loadJSObjectFromString(rootPath, val.toUtf8(), c, false);
     return createJSObject(c, context);
   }
   else if(QFile::exists(val))

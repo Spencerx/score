@@ -123,7 +123,7 @@ void js_node::setupComponent()
   }
 }
 
-void js_node::setScript(const QString& val)
+void js_node::setScript(const QString& rootPath, const QString& val)
 {
   OSSIA_ENSURE_CURRENT_THREAD(ossia::thread_type::Audio);
   if(!m_engine)
@@ -160,7 +160,7 @@ void js_node::setScript(const QString& val)
   m_midOutlets.clear();
 
   delete m_object;
-  if((m_object = createJSObject(val, m_engine.get(), m_context)))
+  if((m_object = createJSObject(rootPath, val, m_engine.get(), m_context)))
     setupComponent();
 }
 

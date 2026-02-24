@@ -84,6 +84,7 @@ ProcessModel::ProcessModel(
     else {
       auto path = data;
       QFile f{path};
+      m_root = path;
       QString exec_data;
       if(f.open(QIODevice::ReadOnly))
         exec_data = f.readAll();
@@ -634,7 +635,7 @@ Script* ComponentCache::getExecution(
   if(!isFile)
   {
     comp = std::make_unique<QQmlComponent>(&dummyEngine);
-    loadJSObjectFromString(str, *comp, false);
+    loadJSObjectFromString(process.rootPath(), str, *comp, false);
   }
   else
   {
@@ -688,7 +689,7 @@ QQmlComponent* ComponentCache::getUi(
   if(!isFile)
   {
     comp = std::make_unique<QQmlComponent>(&dummyEngine);
-    loadJSObjectFromString(str, *comp, true);
+    loadJSObjectFromString(process.rootPath(), str, *comp, true);
   }
   else
   {
