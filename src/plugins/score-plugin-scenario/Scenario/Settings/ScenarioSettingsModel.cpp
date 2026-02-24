@@ -50,13 +50,15 @@ SETTINGS_PARAMETER_IMPL(MagneticMeasures){
 SETTINGS_PARAMETER_IMPL(UpdateRate){QStringLiteral("Scenario/UpdateRate"), 16};
 SETTINGS_PARAMETER_IMPL(ExecutionRefreshRate){
     QStringLiteral("Scenario/ExecutionRefreshRate"), 60};
+SETTINGS_PARAMETER_IMPL(ExecutionUpdate){
+    QStringLiteral("Scenario/ExecutionUpdate"), true};
 
 static auto list()
 {
   return std::tie(
       Skin, DefaultEditor, GraphicZoom, SlotHeight, DefaultDuration, SnapshotOnCreate,
       AutoSequence, TimeBar, MeasureBars, MagneticMeasures, UpdateRate,
-      ExecutionRefreshRate);
+      ExecutionRefreshRate, ExecutionUpdate);
 }
 }
 
@@ -170,6 +172,7 @@ SCORE_SETTINGS_PARAMETER_CPP(bool, Model, MeasureBars)
 SCORE_SETTINGS_PARAMETER_CPP(bool, Model, MagneticMeasures)
 SCORE_SETTINGS_PARAMETER_CPP(int, Model, UpdateRate)
 SCORE_SETTINGS_PARAMETER_CPP(int, Model, ExecutionRefreshRate)
+SCORE_SETTINGS_PARAMETER_CPP(bool, Model, ExecutionUpdate)
 }
 
 double getNewLayerHeight(

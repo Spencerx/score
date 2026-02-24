@@ -285,6 +285,9 @@ View::View()
          "UI updates from the execution engine, audio plug-in UIs..."));
   m_UpdateRate->setRange(1, 50);
   SETTINGS_UI_SPINBOX_SETUP("Execution Refresh Rate (hz)", ExecutionRefreshRate);
+
+  SETTINGS_UI_TOGGLE_SETUP("Execution GUI update", ExecutionUpdate);
+
   score::setHelp(
       this->m_ExecutionRefreshRate,
       tr("Refresh rate of the main view when the score executes, in hertz. "
@@ -300,6 +303,7 @@ SETTINGS_UI_SPINBOX_IMPL(ExecutionRefreshRate)
 SETTINGS_UI_TOGGLE_IMPL(TimeBar)
 SETTINGS_UI_TOGGLE_IMPL(MeasureBars)
 SETTINGS_UI_TOGGLE_IMPL(MagneticMeasures)
+SETTINGS_UI_TOGGLE_IMPL(ExecutionUpdate)
 
 void View::setSkin(const QString& val)
 {

@@ -33,6 +33,7 @@ Presenter::Presenter(Model& m, View& v, QObject* parent)
   SETTINGS_PRESENTER(DefaultDuration);
   SETTINGS_PRESENTER(UpdateRate);
   SETTINGS_PRESENTER(ExecutionRefreshRate);
+  SETTINGS_PRESENTER(ExecutionUpdate);
 
   con(v, &View::zoomChanged, this, [&](auto val) {
     if(val != m.getGraphicZoom())

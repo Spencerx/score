@@ -33,6 +33,8 @@
 #include <Gfx/GfxApplicationPlugin.hpp>
 #endif
 
+#include <Scenario/Settings/ScenarioSettingsModel.hpp>
+
 #include <score/tools/ThreadPool.hpp>
 
 #include <ossia/detail/type_if.hpp>
@@ -401,14 +403,18 @@ public:
     // Engine to ui controls
     if constexpr(control_inputs_type::size > 0 || control_outputs_type::size > 0)
     {
-      // Update the value in the UI
-      std::weak_ptr<safe_node<Node>> weak_node = ptr;
-      update_control_value_in_ui<Node> timer_action{weak_node, &element};
-      timer_action();
+      auto& settings = score::AppContext().settings<Scenario::Settings::Model>();
+      if(settings.getExecutionUpdate())
+      {
+        // Update the value in the UI
+        std::weak_ptr<safe_node<Node>> weak_node = ptr;
+        update_control_value_in_ui<Node> timer_action{weak_node, &element};
+        timer_action();
 
-      con(ctx.doc.coarseUpdateTimer, &QTimer::timeout, this,
-          [timer_action = std::move(timer_action)] { timer_action(); },
-          Qt::QueuedConnection);
+        con(ctx.doc.coarseUpdateTimer, &QTimer::timeout, this,
+            [timer_action = std::move(timer_action)] { timer_action(); },
+            Qt::QueuedConnection);
+      }
     }
   }
 

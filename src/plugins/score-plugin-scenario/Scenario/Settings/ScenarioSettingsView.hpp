@@ -34,6 +34,7 @@ public:
   void setDefaultEditor(QString);
   SETTINGS_UI_SPINBOX_HPP(UpdateRate)
   SETTINGS_UI_SPINBOX_HPP(ExecutionRefreshRate)
+  SETTINGS_UI_TOGGLE_HPP(ExecutionUpdate)
   SETTINGS_UI_TOGGLE_HPP(TimeBar)
   SETTINGS_UI_TOGGLE_HPP(MeasureBars)
   SETTINGS_UI_TOGGLE_HPP(MagneticMeasures)

@@ -181,8 +181,27 @@ ScenarioDocumentPresenter::ScenarioDocumentPresenter(
       Qt::QueuedConnection);
 
   // Execution timers
-  con(m_context.execTimer, &QTimer::timeout, this,
-      &ScenarioDocumentPresenter::on_executionTimer);
+
+  auto& settings = score::AppContext().settings<Scenario::Settings::Model>();
+  if(settings.getExecutionUpdate())
+  {
+    con(m_context.execTimer, &QTimer::timeout, this,
+        &ScenarioDocumentPresenter::on_executionTimer, Qt::UniqueConnection);
+    con(settings, &Scenario::Settings::Model::ExecutionUpdateChanged, this,
+        [this](bool b) {
+      if(b)
+      {
+        con(m_context.execTimer, &QTimer::timeout, this,
+            &ScenarioDocumentPresenter::on_executionTimer, Qt::UniqueConnection);
+      }
+      else
+      {
+        QObject::disconnect(
+            &m_context.execTimer, &QTimer::timeout, this,
+            &ScenarioDocumentPresenter::on_executionTimer);
+      }
+    });
+  }
 
   // Nodal mode control
   if(auto tb = ctx.app.toolbars.get().find(StringKey<score::Toolbar>("UISetup"));

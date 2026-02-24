@@ -30,6 +30,7 @@ class SCORE_PLUGIN_SCENARIO_EXPORT Model final : public score::SettingsDelegateM
   bool m_TimeBar{false};
   bool m_MeasureBars{true};
   bool m_MagneticMeasures{true};
+  bool m_ExecutionUpdate{true};
 
 public:
   Model(
@@ -53,6 +54,7 @@ public:
   SCORE_SETTINGS_PARAMETER_HPP(SCORE_PLUGIN_SCENARIO_EXPORT, bool, MagneticMeasures)
   SCORE_SETTINGS_PARAMETER_HPP(SCORE_PLUGIN_SCENARIO_EXPORT, int, UpdateRate)
   SCORE_SETTINGS_PARAMETER_HPP(SCORE_PLUGIN_SCENARIO_EXPORT, int, ExecutionRefreshRate)
+  SCORE_SETTINGS_PARAMETER_HPP(SCORE_PLUGIN_SCENARIO_EXPORT, bool, ExecutionUpdate)
 
 public:
   SCORE_SETTINGS_PROPERTY(QString, Skin)
@@ -70,6 +72,7 @@ SCORE_SETTINGS_PARAMETER(Model, MeasureBars)
 SCORE_SETTINGS_PARAMETER(Model, MagneticMeasures)
 SCORE_SETTINGS_PARAMETER(Model, UpdateRate)
 SCORE_SETTINGS_PARAMETER(Model, ExecutionRefreshRate)
+SCORE_SETTINGS_PARAMETER(Model, ExecutionUpdate)
 }
 
 double getNewLayerHeight(
