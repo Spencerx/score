@@ -133,7 +133,7 @@ public:
 
   ~ProcessModel() override;
 
-  const QString& rootPath() const noexcept { return m_root; }
+  QString rootPath() const noexcept;
   bool validate(const std::vector<QString>& str) const noexcept;
   void errorMessage(const QString& arg_2) const
       W_SIGNAL(errorMessage, arg_2);

@@ -107,7 +107,6 @@ inline bool copyParentFolderContents(const QString& rootPath, const QString& dst
 inline void loadJSObjectFromString(
     const QString& rootPath, const QByteArray& str, QQmlComponent& comp, bool is_ui)
 {
-  static const auto& lib = score::AppContext().settings<Library::Settings::Model>();
 #if __has_include(<boost/hash2/xxh3.hpp>)
   static const auto cache_path = QStandardPaths::writableLocation(QStandardPaths::CacheLocation);
   QFile f{cache_path + "/Script" + hashFileData(str) + (is_ui ? ".ui.qml" : ".qml")};
@@ -129,12 +128,7 @@ inline void loadJSObjectFromString(
   else
 #endif
   {
-    QString path = rootPath;
-    if(path.isEmpty())
-      path = lib.getDefaultLibraryPath() + QDir::separator() + "Scripts"
-             + QDir::separator() + "include" + QDir::separator() + "Script"
-             + hashFileData(str) + ".qml";
-    comp.setData(str, QUrl::fromLocalFile(path));
+    comp.setData(str, QUrl::fromLocalFile(rootPath));
   }
 }
 

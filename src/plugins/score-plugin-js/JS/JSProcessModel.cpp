@@ -3,19 +3,18 @@
 
 #include "JSProcessModel.hpp"
 
-#include "JS/JSProcessMetadata.hpp"
-
 #include <State/Expression.hpp>
 
 #include <Process/Dataflow/Port.hpp>
 #include <Process/PresetHelpers.hpp>
 
 #include <JS/ApplicationPlugin.hpp>
+#include <JS/Commands/EditScript.hpp>
 #include <JS/Executor/ExecutionHelpers.hpp>
+#include <JS/JSProcessMetadata.hpp>
 #include <JS/Qml/QmlObjects.hpp>
 #include <Library/LibrarySettings.hpp>
 
-#include <JS/Commands/EditScript.hpp>
 #include <score/application/GUIApplicationContext.hpp>
 #include <score/command/Dispatchers/MultiOngoingCommandDispatcher.hpp>
 #include <score/command/Dispatchers/SingleOngoingCommandDispatcher.hpp>
@@ -27,7 +26,6 @@
 
 #include <core/document/Document.hpp>
 
-#include <QStandardPaths>
 #include <QDebug>
 #include <QDir>
 #include <QFileInfo>
@@ -35,6 +33,7 @@
 #include <QQmlComponent>
 #include <QQuickItem>
 #include <QQuickWindow>
+#include <QStandardPaths>
 
 #include <wobjectimpl.h>
 
@@ -116,6 +115,21 @@ ProcessModel::~ProcessModel()
   {
     this->externalUI->close();
     this->externalUI = nullptr;
+  }
+}
+
+QString ProcessModel::rootPath() const noexcept
+{
+  if(!m_root.isEmpty())
+  {
+    return m_root;
+  }
+  else
+  {
+    static const auto& lib = score::AppContext().settings<Library::Settings::Model>();
+
+    return lib.getDefaultLibraryPath() + QDir::separator() + "Scripts"
+           + QDir::separator() + "include" + QDir::separator() + "Script/Script.qml";
   }
 }
 
