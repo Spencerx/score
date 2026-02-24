@@ -44,8 +44,6 @@ struct Node
 
   struct
   {
-    halp::dynamic_audio_bus<"Audio", double> audio;
-
     // Levels output: interleaved [peak0, rms0, peak1, rms1, ...]
     struct : halp::val_port<"Levels", std::vector<float>>
     {
@@ -102,14 +100,6 @@ struct Node
     {
       auto in = inputs.audio.channel(c, frames);
       auto& state = channel_states[c];
-
-      // Pass audio through
-      if(c < outputs.audio.channels)
-      {
-        auto out = outputs.audio.channel(c, frames);
-        for(int i = 0; i < frames; i++)
-          out[i] = in[i];
-      }
 
       // Compute peak and RMS for this buffer
       double buf_peak = 0.0;
