@@ -37,6 +37,12 @@ enum class WindowMode : int
   MultiWindow = 2
 };
 
+struct EdgeBlend
+{
+  float width{0.0f};  // Blend width in UV space (0.0 = no blend, 0.15 = 15% of output)
+  float gamma{2.2f};  // Blend curve exponent (1.0 = linear, 2.2 = typical projector)
+};
+
 struct OutputMapping
 {
   QRectF sourceRect{0.0, 0.0, 1.0, 1.0}; // UV coords in input texture
@@ -44,6 +50,12 @@ struct OutputMapping
   QPoint windowPosition{0, 0};
   QSize windowSize{1280, 720};
   bool fullscreen{false};
+
+  // Soft-edge blending per side
+  EdgeBlend blendLeft;
+  EdgeBlend blendRight;
+  EdgeBlend blendTop;
+  EdgeBlend blendBottom;
 };
 
 class WindowProtocolFactory final : public Device::ProtocolFactory
@@ -119,6 +131,12 @@ public:
   QSize windowSize{1280, 720};
   bool fullscreen{false};
 
+  // Soft-edge blending
+  EdgeBlend blendLeft;
+  EdgeBlend blendRight;
+  EdgeBlend blendTop;
+  EdgeBlend blendBottom;
+
   // Called when item is moved or resized in the canvas
   std::function<void()> onChanged;
 
@@ -142,8 +160,19 @@ private:
   };
   int hitTestEdges(const QPointF& pos) const;
 
+  enum BlendHandle
+  {
+    BlendNone = 0,
+    BlendLeft,
+    BlendRight,
+    BlendTop,
+    BlendBottom
+  };
+  BlendHandle hitTestBlendHandles(const QPointF& pos) const;
+
   int m_index{};
   int m_resizeEdges{None};
+  BlendHandle m_blendHandle{BlendNone};
   QPointF m_dragStart{};
   QRectF m_rectStart{};
 };
@@ -159,8 +188,10 @@ public:
   void addOutput();
   void removeSelectedOutput();
 
-  static constexpr double kCanvasWidth = 400.0;
-  static constexpr double kCanvasHeight = 300.0;
+  void updateAspectRatio(int inputWidth, int inputHeight);
+
+  double canvasWidth() const noexcept { return m_canvasWidth; }
+  double canvasHeight() const noexcept { return m_canvasHeight; }
 
   // Signal-like: call this when selection changes
   std::function<void(int)> onSelectionChanged;
@@ -173,6 +204,9 @@ protected:
 private:
   void setupItemCallbacks(OutputMappingItem* item);
   QGraphicsScene m_scene;
+  QGraphicsRectItem* m_border{};
+  double m_canvasWidth{400.0};
+  double m_canvasHeight{300.0};
 };
 
 class WindowSettingsWidget final : public Device::ProtocolSettingsWidget
@@ -212,6 +246,17 @@ private:
   QLabel* m_srcSizePixelLabel{};
   QSpinBox* m_inputWidth{};
   QSpinBox* m_inputHeight{};
+
+  // Soft-edge blending controls
+  QDoubleSpinBox* m_blendLeftW{};
+  QDoubleSpinBox* m_blendLeftG{};
+  QDoubleSpinBox* m_blendRightW{};
+  QDoubleSpinBox* m_blendRightG{};
+  QDoubleSpinBox* m_blendTopW{};
+  QDoubleSpinBox* m_blendTopG{};
+  QDoubleSpinBox* m_blendBottomW{};
+  QDoubleSpinBox* m_blendBottomG{};
+
   int m_selectedOutput{-1};
 };
 

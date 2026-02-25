@@ -1211,6 +1211,79 @@ public:
         win_node->add_child(std::move(source_node));
       }
 
+      // /i/blend (soft-edge blending per side)
+      {
+        auto blend_node
+            = std::make_unique<ossia::net::generic_node>("blend", *this, *win_node);
+
+        struct BlendSide { const char* name; int side; float initW; float initG; };
+        BlendSide sides[] = {
+            {"left", 0, mapping.blendLeft.width, mapping.blendLeft.gamma},
+            {"right", 1, mapping.blendRight.width, mapping.blendRight.gamma},
+            {"top", 2, mapping.blendTop.width, mapping.blendTop.gamma},
+            {"bottom", 3, mapping.blendBottom.width, mapping.blendBottom.gamma}};
+
+        for(auto& [sname, side, initW, initG] : sides)
+        {
+          auto side_node
+              = std::make_unique<ossia::net::generic_node>(sname, *this, *blend_node);
+          {
+            auto w_node
+                = std::make_unique<ossia::net::generic_node>("width", *this, *side_node);
+            ossia::net::set_description(*w_node, "Blend width in UV space (0-0.5)");
+            auto w_param = w_node->create_parameter(ossia::val_type::FLOAT);
+            w_param->set_domain(ossia::make_domain(0.f, 0.5f));
+            w_param->push_value(initW);
+            w_param->add_callback([this, i, side](const ossia::value& v) {
+              if(auto val = v.target<float>())
+              {
+                const auto& outputs = m_node->windowOutputs();
+                if(i < (int)outputs.size())
+                {
+                  float gamma = 2.2f;
+                  switch(side) {
+                    case 0: gamma = outputs[i].blendLeft.gamma; break;
+                    case 1: gamma = outputs[i].blendRight.gamma; break;
+                    case 2: gamma = outputs[i].blendTop.gamma; break;
+                    case 3: gamma = outputs[i].blendBottom.gamma; break;
+                  }
+                  m_node->setEdgeBlend(i, side, *val, gamma);
+                }
+              }
+            });
+            side_node->add_child(std::move(w_node));
+          }
+          {
+            auto g_node
+                = std::make_unique<ossia::net::generic_node>("gamma", *this, *side_node);
+            ossia::net::set_description(*g_node, "Blend curve exponent (0.1-4.0)");
+            auto g_param = g_node->create_parameter(ossia::val_type::FLOAT);
+            g_param->set_domain(ossia::make_domain(0.1f, 4.f));
+            g_param->push_value(initG);
+            g_param->add_callback([this, i, side](const ossia::value& v) {
+              if(auto val = v.target<float>())
+              {
+                const auto& outputs = m_node->windowOutputs();
+                if(i < (int)outputs.size())
+                {
+                  float width = 0.f;
+                  switch(side) {
+                    case 0: width = outputs[i].blendLeft.width; break;
+                    case 1: width = outputs[i].blendRight.width; break;
+                    case 2: width = outputs[i].blendTop.width; break;
+                    case 3: width = outputs[i].blendBottom.width; break;
+                  }
+                  m_node->setEdgeBlend(i, side, width, *val);
+                }
+              }
+            });
+            side_node->add_child(std::move(g_node));
+          }
+          blend_node->add_child(std::move(side_node));
+        }
+        win_node->add_child(std::move(blend_node));
+      }
+
       // /i/key
       {
         auto key_node
@@ -1557,6 +1630,104 @@ void OutputMappingItem::paint(
   painter->setFont(font);
   painter->drawText(rect(), Qt::AlignCenter, QString::number(m_index));
 
+  // Draw blend zones as gradient overlays
+  auto r = rect();
+  auto drawBlendZone = [&](const EdgeBlend& blend, const QRectF& zone, bool horizontal) {
+    if(blend.width <= 0.0f)
+      return;
+    QLinearGradient grad;
+    QColor blendColor(255, 200, 50, 100);
+    QColor transparent(255, 200, 50, 0);
+    if(horizontal)
+    {
+      grad.setStart(zone.left(), zone.center().y());
+      grad.setFinalStop(zone.right(), zone.center().y());
+    }
+    else
+    {
+      grad.setStart(zone.center().x(), zone.top());
+      grad.setFinalStop(zone.center().x(), zone.bottom());
+    }
+    grad.setColorAt(0, blendColor);
+    grad.setColorAt(1, transparent);
+    painter->setPen(Qt::NoPen);
+    painter->setBrush(QBrush(grad));
+    painter->drawRect(zone);
+  };
+
+  // Left blend: gradient from left edge inward
+  if(blendLeft.width > 0.0f)
+  {
+    double w = blendLeft.width * r.width();
+    drawBlendZone(blendLeft, QRectF(r.left(), r.top(), w, r.height()), true);
+  }
+  // Right blend: gradient from right edge inward
+  if(blendRight.width > 0.0f)
+  {
+    double w = blendRight.width * r.width();
+    QLinearGradient grad(r.right(), r.center().y(), r.right() - w, r.center().y());
+    grad.setColorAt(0, QColor(255, 200, 50, 100));
+    grad.setColorAt(1, QColor(255, 200, 50, 0));
+    painter->setPen(Qt::NoPen);
+    painter->setBrush(QBrush(grad));
+    painter->drawRect(QRectF(r.right() - w, r.top(), w, r.height()));
+  }
+  // Top blend: gradient from top edge inward
+  if(blendTop.width > 0.0f)
+  {
+    double h = blendTop.width * r.height();
+    drawBlendZone(blendTop, QRectF(r.left(), r.top(), r.width(), h), false);
+  }
+  // Bottom blend: gradient from bottom edge inward
+  if(blendBottom.width > 0.0f)
+  {
+    double h = blendBottom.width * r.height();
+    QLinearGradient grad(r.center().x(), r.bottom(), r.center().x(), r.bottom() - h);
+    grad.setColorAt(0, QColor(255, 200, 50, 100));
+    grad.setColorAt(1, QColor(255, 200, 50, 0));
+    painter->setPen(Qt::NoPen);
+    painter->setBrush(QBrush(grad));
+    painter->drawRect(QRectF(r.left(), r.bottom() - h, r.width(), h));
+  }
+
+  // Draw blend handle lines at the boundary of each blend zone.
+  // Always draw a subtle dotted line at the handle position (even when width=0)
+  // so the user knows the handle is grabbable; draw a stronger line when active.
+  {
+    constexpr double minInset = 10.0;
+    painter->setBrush(Qt::NoBrush);
+
+    auto drawHandle = [&](float blendWidth, bool horizontal, bool fromStart) {
+      double offset;
+      if(horizontal)
+        offset = std::max((double)blendWidth * r.width(), minInset);
+      else
+        offset = std::max((double)blendWidth * r.height(), minInset);
+
+      // Active blend: bright dashed line; inactive: dim dotted line
+      if(blendWidth > 0.0f)
+        painter->setPen(QPen(QColor(255, 200, 50, 200), 1.5, Qt::DashLine));
+      else
+        painter->setPen(QPen(QColor(255, 200, 50, 60), 1, Qt::DotLine));
+
+      if(horizontal)
+      {
+        double x = fromStart ? r.left() + offset : r.right() - offset;
+        painter->drawLine(QPointF(x, r.top()), QPointF(x, r.bottom()));
+      }
+      else
+      {
+        double y = fromStart ? r.top() + offset : r.bottom() - offset;
+        painter->drawLine(QPointF(r.left(), y), QPointF(r.right(), y));
+      }
+    };
+
+    drawHandle(blendLeft.width, true, true);
+    drawHandle(blendRight.width, true, false);
+    drawHandle(blendTop.width, false, true);
+    drawHandle(blendBottom.width, false, false);
+  }
+
   // Draw selection highlight
   if(isSelected())
   {
@@ -1583,6 +1754,41 @@ int OutputMappingItem::hitTestEdges(const QPointF& pos) const
   return edges;
 }
 
+OutputMappingItem::BlendHandle OutputMappingItem::hitTestBlendHandles(const QPointF& pos) const
+{
+  constexpr double handleMargin = 5.0;
+  // Minimum inset from the edge so the handle zone never overlaps with the
+  // 6px resize margin. This ensures handles are grabbable even at width=0.
+  constexpr double minInset = 10.0;
+  auto r = rect();
+
+  {
+    double handleX = r.left() + std::max((double)blendLeft.width * r.width(), minInset);
+    if(std::abs(pos.x() - handleX) < handleMargin
+       && pos.y() >= r.top() && pos.y() <= r.bottom())
+      return BlendLeft;
+  }
+  {
+    double handleX = r.right() - std::max((double)blendRight.width * r.width(), minInset);
+    if(std::abs(pos.x() - handleX) < handleMargin
+       && pos.y() >= r.top() && pos.y() <= r.bottom())
+      return BlendRight;
+  }
+  {
+    double handleY = r.top() + std::max((double)blendTop.width * r.height(), minInset);
+    if(std::abs(pos.y() - handleY) < handleMargin
+       && pos.x() >= r.left() && pos.x() <= r.right())
+      return BlendTop;
+  }
+  {
+    double handleY = r.bottom() - std::max((double)blendBottom.width * r.height(), minInset);
+    if(std::abs(pos.y() - handleY) < handleMargin
+       && pos.x() >= r.left() && pos.x() <= r.right())
+      return BlendBottom;
+  }
+  return BlendNone;
+}
+
 QVariant OutputMappingItem::itemChange(GraphicsItemChange change, const QVariant& value)
 {
   if(change == ItemPositionChange && scene())
@@ -1607,6 +1813,15 @@ QVariant OutputMappingItem::itemChange(GraphicsItemChange change, const QVariant
 
 void OutputMappingItem::mousePressEvent(QGraphicsSceneMouseEvent* event)
 {
+  // Check blend handles first (they are inside the rect, so test before edges)
+  m_blendHandle = hitTestBlendHandles(event->pos());
+  if(m_blendHandle != BlendNone)
+  {
+    m_dragStart = event->pos();
+    event->accept();
+    return;
+  }
+
   m_resizeEdges = hitTestEdges(event->pos());
   if(m_resizeEdges != None)
   {
@@ -1622,6 +1837,44 @@ void OutputMappingItem::mousePressEvent(QGraphicsSceneMouseEvent* event)
 
 void OutputMappingItem::mouseMoveEvent(QGraphicsSceneMouseEvent* event)
 {
+  if(m_blendHandle != BlendNone)
+  {
+    auto r = rect();
+    auto pos = event->pos();
+
+    switch(m_blendHandle)
+    {
+      case BlendLeft: {
+        double newW = qBound(0.0, (pos.x() - r.left()) / r.width(), 0.5);
+        blendLeft.width = (float)newW;
+        break;
+      }
+      case BlendRight: {
+        double newW = qBound(0.0, (r.right() - pos.x()) / r.width(), 0.5);
+        blendRight.width = (float)newW;
+        break;
+      }
+      case BlendTop: {
+        double newH = qBound(0.0, (pos.y() - r.top()) / r.height(), 0.5);
+        blendTop.width = (float)newH;
+        break;
+      }
+      case BlendBottom: {
+        double newH = qBound(0.0, (r.bottom() - pos.y()) / r.height(), 0.5);
+        blendBottom.width = (float)newH;
+        break;
+      }
+      default:
+        break;
+    }
+
+    update();
+    if(onChanged)
+      onChanged();
+    event->accept();
+    return;
+  }
+
   if(m_resizeEdges != None)
   {
     auto delta = event->scenePos() - m_dragStart;
@@ -1670,12 +1923,28 @@ void OutputMappingItem::mouseMoveEvent(QGraphicsSceneMouseEvent* event)
 
 void OutputMappingItem::mouseReleaseEvent(QGraphicsSceneMouseEvent* event)
 {
+  m_blendHandle = BlendNone;
   m_resizeEdges = None;
   QGraphicsRectItem::mouseReleaseEvent(event);
 }
 
 void OutputMappingItem::hoverMoveEvent(QGraphicsSceneHoverEvent* event)
 {
+  // Check blend handles first
+  auto bh = hitTestBlendHandles(event->pos());
+  if(bh == BlendLeft || bh == BlendRight)
+  {
+    setCursor(Qt::SplitHCursor);
+    QGraphicsRectItem::hoverMoveEvent(event);
+    return;
+  }
+  if(bh == BlendTop || bh == BlendBottom)
+  {
+    setCursor(Qt::SplitVCursor);
+    QGraphicsRectItem::hoverMoveEvent(event);
+    return;
+  }
+
   int edges = hitTestEdges(event->pos());
   if((edges & Left) && (edges & Top))
     setCursor(Qt::SizeFDiagCursor);
@@ -1701,7 +1970,7 @@ OutputMappingCanvas::OutputMappingCanvas(QWidget* parent)
     : QGraphicsView(parent)
 {
   setScene(&m_scene);
-  m_scene.setSceneRect(0, 0, kCanvasWidth, kCanvasHeight);
+  m_scene.setSceneRect(0, 0, m_canvasWidth, m_canvasHeight);
   setMinimumSize(200, 150);
   setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
   setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
@@ -1710,8 +1979,8 @@ OutputMappingCanvas::OutputMappingCanvas(QWidget* parent)
   setRenderHint(QPainter::Antialiasing);
 
   // Draw border around the full texture area
-  auto border = m_scene.addRect(0, 0, kCanvasWidth, kCanvasHeight, QPen(Qt::gray, 1));
-  border->setZValue(-1);
+  m_border = m_scene.addRect(0, 0, m_canvasWidth, m_canvasHeight, QPen(Qt::gray, 1));
+  m_border->setZValue(-1);
 
   connect(&m_scene, &QGraphicsScene::selectionChanged, this, [this] {
     if(onSelectionChanged)
@@ -1733,6 +2002,52 @@ OutputMappingCanvas::OutputMappingCanvas(QWidget* parent)
 void OutputMappingCanvas::resizeEvent(QResizeEvent* event)
 {
   QGraphicsView::resizeEvent(event);
+  fitInView(m_scene.sceneRect(), Qt::KeepAspectRatio);
+}
+
+void OutputMappingCanvas::updateAspectRatio(int inputWidth, int inputHeight)
+{
+  if(inputWidth < 1 || inputHeight < 1)
+    return;
+
+  // Keep the longer axis at 400px, scale the other to match the aspect ratio
+  constexpr double maxDim = 400.0;
+  double aspect = (double)inputWidth / (double)inputHeight;
+  double oldW = m_canvasWidth;
+  double oldH = m_canvasHeight;
+
+  if(aspect >= 1.0)
+  {
+    m_canvasWidth = maxDim;
+    m_canvasHeight = maxDim / aspect;
+  }
+  else
+  {
+    m_canvasHeight = maxDim;
+    m_canvasWidth = maxDim * aspect;
+  }
+
+  // Rescale existing mapping items from old dimensions to new
+  if(oldW > 0 && oldH > 0)
+  {
+    double sx = m_canvasWidth / oldW;
+    double sy = m_canvasHeight / oldH;
+
+    for(auto* item : m_scene.items())
+    {
+      if(auto* mi = dynamic_cast<OutputMappingItem*>(item))
+      {
+        auto r = mi->mapRectToScene(mi->rect());
+        QRectF scaled(r.x() * sx, r.y() * sy, r.width() * sx, r.height() * sy);
+        mi->setPos(0, 0);
+        mi->setRect(scaled);
+      }
+    }
+  }
+
+  m_scene.setSceneRect(0, 0, m_canvasWidth, m_canvasHeight);
+  if(m_border)
+    m_border->setRect(0, 0, m_canvasWidth, m_canvasHeight);
   fitInView(m_scene.sceneRect(), Qt::KeepAspectRatio);
 }
 
@@ -1763,13 +2078,17 @@ void OutputMappingCanvas::setMappings(const std::vector<OutputMapping>& mappings
   {
     const auto& m = mappings[i];
     QRectF sceneRect(
-        m.sourceRect.x() * kCanvasWidth, m.sourceRect.y() * kCanvasHeight,
-        m.sourceRect.width() * kCanvasWidth, m.sourceRect.height() * kCanvasHeight);
+        m.sourceRect.x() * canvasWidth(), m.sourceRect.y() * canvasHeight(),
+        m.sourceRect.width() * canvasWidth(), m.sourceRect.height() * canvasHeight());
     auto* item = new OutputMappingItem(i, sceneRect);
     item->screenIndex = m.screenIndex;
     item->windowPosition = m.windowPosition;
     item->windowSize = m.windowSize;
     item->fullscreen = m.fullscreen;
+    item->blendLeft = m.blendLeft;
+    item->blendRight = m.blendRight;
+    item->blendTop = m.blendTop;
+    item->blendBottom = m.blendBottom;
     setupItemCallbacks(item);
     m_scene.addItem(item);
   }
@@ -1796,12 +2115,16 @@ std::vector<OutputMapping> OutputMappingCanvas::getMappings() const
     OutputMapping m;
     auto r = item->mapRectToScene(item->rect());
     m.sourceRect = QRectF(
-        r.x() / kCanvasWidth, r.y() / kCanvasHeight, r.width() / kCanvasWidth,
-        r.height() / kCanvasHeight);
+        r.x() / canvasWidth(), r.y() / canvasHeight(), r.width() / canvasWidth(),
+        r.height() / canvasHeight());
     m.screenIndex = item->screenIndex;
     m.windowPosition = item->windowPosition;
     m.windowSize = item->windowSize;
     m.fullscreen = item->fullscreen;
+    m.blendLeft = item->blendLeft;
+    m.blendRight = item->blendRight;
+    m.blendTop = item->blendTop;
+    m.blendBottom = item->blendBottom;
     result.push_back(m);
   }
   return result;
@@ -1815,8 +2138,8 @@ void OutputMappingCanvas::addOutput()
       count++;
 
   // Place new output at a default position
-  double x = (count * 30) % (int)(kCanvasWidth - 100);
-  double y = (count * 30) % (int)(kCanvasHeight - 75);
+  double x = (count * 30) % (int)(canvasWidth() - 100);
+  double y = (count * 30) % (int)(canvasHeight() - 75);
   auto* item = new OutputMappingItem(count, QRectF(x, y, 100, 75));
   setupItemCallbacks(item);
   m_scene.addItem(item);
@@ -1980,6 +2303,36 @@ WindowSettingsWidget::WindowSettingsWidget(QWidget* parent)
     m_fullscreenCheck = new QCheckBox;
     propLayout->addRow(tr("Fullscreen"), m_fullscreenCheck);
 
+    // Soft-edge blending controls
+    auto* blendGroup = new QGroupBox(tr("Soft-Edge Blending"));
+    auto* blendLayout = new QFormLayout(blendGroup);
+
+    auto makeBlendRow = [&](const QString& label, QDoubleSpinBox*& widthSpin, QDoubleSpinBox*& gammaSpin) {
+      widthSpin = new QDoubleSpinBox;
+      widthSpin->setRange(0.0, 0.5);
+      widthSpin->setSingleStep(0.01);
+      widthSpin->setDecimals(3);
+      widthSpin->setValue(0.0);
+      gammaSpin = new QDoubleSpinBox;
+      gammaSpin->setRange(0.1, 4.0);
+      gammaSpin->setSingleStep(0.1);
+      gammaSpin->setDecimals(2);
+      gammaSpin->setValue(2.2);
+      auto* row = new QHBoxLayout;
+      row->addWidget(new QLabel(tr("Width")));
+      row->addWidget(widthSpin);
+      row->addWidget(new QLabel(tr("Gamma")));
+      row->addWidget(gammaSpin);
+      blendLayout->addRow(label, row);
+    };
+
+    makeBlendRow(tr("Left"), m_blendLeftW, m_blendLeftG);
+    makeBlendRow(tr("Right"), m_blendRightW, m_blendRightG);
+    makeBlendRow(tr("Top"), m_blendTopW, m_blendTopG);
+    makeBlendRow(tr("Bottom"), m_blendBottomW, m_blendBottomG);
+
+    propLayout->addRow(blendGroup);
+
     propGroup->setEnabled(false);
     multiLayout->addWidget(propGroup);
 
@@ -2003,6 +2356,14 @@ WindowSettingsWidget::WindowSettingsWidget(QWidget* parent)
     connect(m_winWidth, qOverload<int>(&QSpinBox::valueChanged), this, applyProps);
     connect(m_winHeight, qOverload<int>(&QSpinBox::valueChanged), this, applyProps);
     connect(m_fullscreenCheck, &QCheckBox::toggled, this, applyProps);
+    connect(m_blendLeftW, qOverload<double>(&QDoubleSpinBox::valueChanged), this, applyProps);
+    connect(m_blendLeftG, qOverload<double>(&QDoubleSpinBox::valueChanged), this, applyProps);
+    connect(m_blendRightW, qOverload<double>(&QDoubleSpinBox::valueChanged), this, applyProps);
+    connect(m_blendRightG, qOverload<double>(&QDoubleSpinBox::valueChanged), this, applyProps);
+    connect(m_blendTopW, qOverload<double>(&QDoubleSpinBox::valueChanged), this, applyProps);
+    connect(m_blendTopG, qOverload<double>(&QDoubleSpinBox::valueChanged), this, applyProps);
+    connect(m_blendBottomW, qOverload<double>(&QDoubleSpinBox::valueChanged), this, applyProps);
+    connect(m_blendBottomG, qOverload<double>(&QDoubleSpinBox::valueChanged), this, applyProps);
 
     // Wire source rect spinboxes to update canvas item geometry
     auto applySrc = [this] { applySourceRectToSelection(); };
@@ -2020,6 +2381,16 @@ WindowSettingsWidget::WindowSettingsWidget(QWidget* parent)
     connect(m_inputWidth, qOverload<int>(&QSpinBox::valueChanged), this, updatePx);
     connect(m_inputHeight, qOverload<int>(&QSpinBox::valueChanged), this, updatePx);
     connect(m_screenCombo, qOverload<int>(&QComboBox::currentIndexChanged), this, updatePx);
+
+    // Update canvas aspect ratio when input resolution changes
+    auto updateAR = [this] {
+      m_canvas->updateAspectRatio(m_inputWidth->value(), m_inputHeight->value());
+    };
+    connect(m_inputWidth, qOverload<int>(&QSpinBox::valueChanged), this, updateAR);
+    connect(m_inputHeight, qOverload<int>(&QSpinBox::valueChanged), this, updateAR);
+
+    // Set initial aspect ratio
+    m_canvas->updateAspectRatio(m_inputWidth->value(), m_inputHeight->value());
 
     m_stack->addWidget(multiWidget);
   }
@@ -2064,10 +2435,10 @@ void WindowSettingsWidget::updatePropertiesFromSelection()
 
         // Update source rect from canvas item geometry
         auto sceneRect = mi->mapRectToScene(mi->rect());
-        m_srcX->setValue(sceneRect.x() / OutputMappingCanvas::kCanvasWidth);
-        m_srcY->setValue(sceneRect.y() / OutputMappingCanvas::kCanvasHeight);
-        m_srcW->setValue(sceneRect.width() / OutputMappingCanvas::kCanvasWidth);
-        m_srcH->setValue(sceneRect.height() / OutputMappingCanvas::kCanvasHeight);
+        m_srcX->setValue(sceneRect.x() / m_canvas->canvasWidth());
+        m_srcY->setValue(sceneRect.y() / m_canvas->canvasHeight());
+        m_srcW->setValue(sceneRect.width() / m_canvas->canvasWidth());
+        m_srcH->setValue(sceneRect.height() / m_canvas->canvasHeight());
 
         // Update window properties
         m_screenCombo->setCurrentIndex(mi->screenIndex + 1); // +1 because index 0 is "Default"
@@ -2076,6 +2447,26 @@ void WindowSettingsWidget::updatePropertiesFromSelection()
         m_winWidth->setValue(mi->windowSize.width());
         m_winHeight->setValue(mi->windowSize.height());
         m_fullscreenCheck->setChecked(mi->fullscreen);
+
+        {
+          const QSignalBlocker b11(m_blendLeftW);
+          const QSignalBlocker b12(m_blendLeftG);
+          const QSignalBlocker b13(m_blendRightW);
+          const QSignalBlocker b14(m_blendRightG);
+          const QSignalBlocker b15(m_blendTopW);
+          const QSignalBlocker b16(m_blendTopG);
+          const QSignalBlocker b17(m_blendBottomW);
+          const QSignalBlocker b18(m_blendBottomG);
+
+          m_blendLeftW->setValue(mi->blendLeft.width);
+          m_blendLeftG->setValue(mi->blendLeft.gamma);
+          m_blendRightW->setValue(mi->blendRight.width);
+          m_blendRightG->setValue(mi->blendRight.gamma);
+          m_blendTopW->setValue(mi->blendTop.width);
+          m_blendTopG->setValue(mi->blendTop.gamma);
+          m_blendBottomW->setValue(mi->blendBottom.width);
+          m_blendBottomG->setValue(mi->blendBottom.gamma);
+        }
 
         updatePixelLabels();
         return;
@@ -2099,6 +2490,12 @@ void WindowSettingsWidget::applyPropertiesToSelection()
         mi->windowPosition = QPoint(m_winPosX->value(), m_winPosY->value());
         mi->windowSize = QSize(m_winWidth->value(), m_winHeight->value());
         mi->fullscreen = m_fullscreenCheck->isChecked();
+
+        mi->blendLeft = {(float)m_blendLeftW->value(), (float)m_blendLeftG->value()};
+        mi->blendRight = {(float)m_blendRightW->value(), (float)m_blendRightG->value()};
+        mi->blendTop = {(float)m_blendTopW->value(), (float)m_blendTopG->value()};
+        mi->blendBottom = {(float)m_blendBottomW->value(), (float)m_blendBottomG->value()};
+        mi->update(); // Repaint to show blend zones
         return;
       }
     }
@@ -2117,10 +2514,10 @@ void WindowSettingsWidget::applySourceRectToSelection()
       if(mi->outputIndex() == m_selectedOutput)
       {
         QRectF newSceneRect(
-            m_srcX->value() * OutputMappingCanvas::kCanvasWidth,
-            m_srcY->value() * OutputMappingCanvas::kCanvasHeight,
-            m_srcW->value() * OutputMappingCanvas::kCanvasWidth,
-            m_srcH->value() * OutputMappingCanvas::kCanvasHeight);
+            m_srcX->value() * m_canvas->canvasWidth(),
+            m_srcY->value() * m_canvas->canvasHeight(),
+            m_srcW->value() * m_canvas->canvasWidth(),
+            m_srcH->value() * m_canvas->canvasHeight());
 
         // Temporarily disable onChanged to avoid feedback loop
         auto savedCallback = std::move(mi->onChanged);
@@ -2211,6 +2608,10 @@ void DataStreamReader::read(const Gfx::OutputMapping& n)
 {
   m_stream << n.sourceRect << n.screenIndex << n.windowPosition << n.windowSize
            << n.fullscreen;
+  m_stream << n.blendLeft.width << n.blendLeft.gamma;
+  m_stream << n.blendRight.width << n.blendRight.gamma;
+  m_stream << n.blendTop.width << n.blendTop.gamma;
+  m_stream << n.blendBottom.width << n.blendBottom.gamma;
 }
 
 template <>
@@ -2218,12 +2619,16 @@ void DataStreamWriter::write(Gfx::OutputMapping& n)
 {
   m_stream >> n.sourceRect >> n.screenIndex >> n.windowPosition >> n.windowSize
       >> n.fullscreen;
+  m_stream >> n.blendLeft.width >> n.blendLeft.gamma;
+  m_stream >> n.blendRight.width >> n.blendRight.gamma;
+  m_stream >> n.blendTop.width >> n.blendTop.gamma;
+  m_stream >> n.blendBottom.width >> n.blendBottom.gamma;
 }
 
 template <>
 void DataStreamReader::read(const Gfx::WindowSettings& n)
 {
-  m_stream << (int32_t)2; // version tag
+  m_stream << (int32_t)3; // version tag
   m_stream << (int32_t)n.mode;
   m_stream << (int32_t)n.outputs.size();
   for(const auto& o : n.outputs)
@@ -2242,6 +2647,21 @@ void DataStreamWriter::write(Gfx::WindowSettings& n)
     n.mode = version ? Gfx::WindowMode::Background : Gfx::WindowMode::Single;
   }
   else if(version == 2)
+  {
+    int32_t mode{};
+    m_stream >> mode;
+    n.mode = (Gfx::WindowMode)mode;
+    int32_t count{};
+    m_stream >> count;
+    n.outputs.resize(count);
+    for(auto& o : n.outputs)
+    {
+      // Version 2: no blend data
+      m_stream >> o.sourceRect >> o.screenIndex >> o.windowPosition >> o.windowSize
+          >> o.fullscreen;
+    }
+  }
+  else if(version == 3)
   {
     int32_t mode{};
     m_stream >> mode;
@@ -2280,6 +2700,19 @@ void JSONReader::read(const Gfx::OutputMapping& n)
   stream.EndArray();
   stream.Key("Fullscreen");
   stream.Bool(n.fullscreen);
+
+  auto writeBlend = [&](const char* key, const Gfx::EdgeBlend& b) {
+    stream.Key(key);
+    stream.StartArray();
+    stream.Double(b.width);
+    stream.Double(b.gamma);
+    stream.EndArray();
+  };
+  writeBlend("BlendLeft", n.blendLeft);
+  writeBlend("BlendRight", n.blendRight);
+  writeBlend("BlendTop", n.blendTop);
+  writeBlend("BlendBottom", n.blendBottom);
+
   stream.EndObject();
 }
 
@@ -2310,6 +2743,22 @@ void JSONWriter::write(Gfx::OutputMapping& n)
   }
   if(auto v = obj.tryGet("Fullscreen"))
     n.fullscreen = v->toBool();
+
+  auto readBlend = [&](const std::string& key, Gfx::EdgeBlend& b) {
+    if(auto v = obj.tryGet(key))
+    {
+      auto arr = v->toArray();
+      if(arr.Size() == 2)
+      {
+        b.width = (float)arr[0].GetDouble();
+        b.gamma = (float)arr[1].GetDouble();
+      }
+    }
+  };
+  readBlend("BlendLeft", n.blendLeft);
+  readBlend("BlendRight", n.blendRight);
+  readBlend("BlendTop", n.blendTop);
+  readBlend("BlendBottom", n.blendBottom);
 }
 
 template <>

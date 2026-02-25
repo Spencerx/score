@@ -31,6 +31,7 @@ public:
   {
     score::gfx::Pipeline pipeline;
     QRhiBuffer* uvRectUBO{};
+    QRhiBuffer* blendUBO{};
     std::array<score::gfx::Sampler, 1> samplers{};
     QRhiShaderResourceBindings* srb{};
     QRectF sourceRect{0, 0, 1, 1};
@@ -80,20 +81,39 @@ public:
           vec4 sourceRect; // x, y, width, height in canvas UV space
       };
 
+      layout(std140, binding = 4) uniform BlendParams {
+          vec4 blendWidths; // left, right, top, bottom (in output UV 0-1)
+          vec4 blendGammas; // left, right, top, bottom
+      };
+
       void main()
       {
           vec2 uv;
           uv.x = sourceRect.x + v_texcoord.x * sourceRect.z;
 #if defined(QSHADER_SPIRV)
-          // SPIRV/Vulkan: flip v_texcoord.y (same as ScaledRenderer),
-          // use sourceRect.y directly in canvas space
           uv.y = sourceRect.y + (1.0 - v_texcoord.y) * sourceRect.w;
 #else
-          // OpenGL: v_texcoord.y is Y-up, convert sourceRect from canvas Y-down to texture Y-up
           float texSrcY = 1.0 - sourceRect.y - sourceRect.w;
           uv.y = texSrcY + v_texcoord.y * sourceRect.w;
 #endif
           fragColor = texture(tex, uv);
+
+          // Soft-edge blending
+          float alpha = 1.0;
+          // Left edge
+          if(blendWidths.x > 0.0 && v_texcoord.x < blendWidths.x)
+              alpha *= pow(v_texcoord.x / blendWidths.x, blendGammas.x);
+          // Right edge
+          if(blendWidths.y > 0.0 && v_texcoord.x > 1.0 - blendWidths.y)
+              alpha *= pow((1.0 - v_texcoord.x) / blendWidths.y, blendGammas.y);
+          // Top edge
+          if(blendWidths.z > 0.0 && v_texcoord.y < blendWidths.z)
+              alpha *= pow(v_texcoord.y / blendWidths.z, blendGammas.z);
+          // Bottom edge
+          if(blendWidths.w > 0.0 && v_texcoord.y > 1.0 - blendWidths.w)
+              alpha *= pow((1.0 - v_texcoord.y) / blendWidths.w, blendGammas.w);
+
+          fragColor = vec4(fragColor.rgb * alpha, alpha);
       }
       )_";
 
@@ -122,6 +142,17 @@ public:
           (float)pw.sourceRect.width(), (float)pw.sourceRect.height()};
       res.updateDynamicBuffer(pw.uvRectUBO, 0, sizeof(rectData), rectData);
 
+      // Create UBO for blend parameters (4 widths + 4 gammas = 8 floats)
+      pw.blendUBO = rhi.newBuffer(
+          QRhiBuffer::Dynamic, QRhiBuffer::UniformBuffer, 8 * sizeof(float));
+      pw.blendUBO->setName(QByteArray("MultiWindowRenderer::blendUBO_") + QByteArray::number(i));
+      pw.blendUBO->create();
+
+      float blendData[8] = {
+          wo.blendLeft.width, wo.blendRight.width, wo.blendTop.width, wo.blendBottom.width,
+          wo.blendLeft.gamma, wo.blendRight.gamma, wo.blendTop.gamma, wo.blendBottom.gamma};
+      res.updateDynamicBuffer(pw.blendUBO, 0, sizeof(blendData), blendData);
+
       // Create sampler pointing to input texture
       auto sampler = rhi.newSampler(
           QRhiSampler::Linear, QRhiSampler::Linear, QRhiSampler::None,
@@ -138,9 +169,12 @@ public:
         score::gfx::TextureRenderTarget rt;
         rt.renderPass = wo.renderPassDescriptor;
 
+        auto blendBinding = QRhiShaderResourceBinding::uniformBuffer(
+            4, QRhiShaderResourceBinding::FragmentStage, pw.blendUBO);
+
         pw.pipeline = score::gfx::buildPipeline(
             renderer, mesh, m_vertexS, m_fragmentS, rt, nullptr, pw.uvRectUBO,
-            pw.samplers);
+            pw.samplers, {&blendBinding, 1});
       }
     }
   }
@@ -161,6 +195,8 @@ public:
       pw.samplers = {};
       delete pw.uvRectUBO;
       pw.uvRectUBO = nullptr;
+      delete pw.blendUBO;
+      pw.blendUBO = nullptr;
     }
     m_perWindow.clear();
     m_inputTarget.release();
@@ -207,7 +243,7 @@ private:
     if(!rt)
       return;
 
-    // Update UBO from live sourceRect (may have changed via device parameter)
+    // Update UBOs from live data (may have changed via device parameters)
     if(pw.uvRectUBO)
     {
       if(!res)
@@ -217,6 +253,17 @@ private:
           (float)wo.sourceRect.x(), (float)wo.sourceRect.y(),
           (float)wo.sourceRect.width(), (float)wo.sourceRect.height()};
       res->updateDynamicBuffer(pw.uvRectUBO, 0, sizeof(rectData), rectData);
+    }
+
+    if(pw.blendUBO)
+    {
+      if(!res)
+        res = renderer.state.rhi->nextResourceUpdateBatch();
+
+      float blendData[8] = {
+          wo.blendLeft.width, wo.blendRight.width, wo.blendTop.width, wo.blendBottom.width,
+          wo.blendLeft.gamma, wo.blendRight.gamma, wo.blendTop.gamma, wo.blendBottom.gamma};
+      res->updateDynamicBuffer(pw.blendUBO, 0, sizeof(blendData), blendData);
     }
 
     cb.beginPass(rt, Qt::black, {1.0f, 0}, res);
@@ -289,6 +336,25 @@ void MultiWindowNode::setSourceRect(int windowIndex, QRectF rect)
 {
   if(windowIndex >= 0 && windowIndex < (int)m_windowOutputs.size())
     m_windowOutputs[windowIndex].sourceRect = rect;
+}
+
+void MultiWindowNode::setEdgeBlend(int windowIndex, int side, float width, float gamma)
+{
+  if(windowIndex < 0 || windowIndex >= (int)m_windowOutputs.size())
+    return;
+
+  auto& wo = m_windowOutputs[windowIndex];
+  EdgeBlendData* target{};
+  switch(side)
+  {
+    case 0: target = &wo.blendLeft; break;
+    case 1: target = &wo.blendRight; break;
+    case 2: target = &wo.blendTop; break;
+    case 3: target = &wo.blendBottom; break;
+    default: return;
+  }
+  target->width = width;
+  target->gamma = gamma;
 }
 
 void MultiWindowNode::startRendering()
@@ -467,6 +533,11 @@ void MultiWindowNode::initWindow(int index, GraphicsApi api)
     m_renderState->renderPassDescriptor = wo.renderPassDescriptor;
 
   wo.sourceRect = mapping.sourceRect;
+
+  wo.blendLeft = {mapping.blendLeft.width, mapping.blendLeft.gamma};
+  wo.blendRight = {mapping.blendRight.width, mapping.blendRight.gamma};
+  wo.blendTop = {mapping.blendTop.width, mapping.blendTop.gamma};
+  wo.blendBottom = {mapping.blendBottom.width, mapping.blendBottom.gamma};
 }
 
 void MultiWindowNode::createOutput(score::gfx::OutputConfiguration conf)

@@ -30,6 +30,12 @@ struct SCORE_PLUGIN_GFX_EXPORT MultiWindowNode : OutputNode
   score::gfx::OutputNodeRenderer* createRenderer(RenderList& r) const noexcept override;
   Configuration configuration() const noexcept override;
 
+  struct EdgeBlendData
+  {
+    float width{0.0f};
+    float gamma{2.2f};
+  };
+
   struct WindowOutput
   {
     std::shared_ptr<Window> window;
@@ -38,6 +44,8 @@ struct SCORE_PLUGIN_GFX_EXPORT MultiWindowNode : OutputNode
     QRhiRenderPassDescriptor* renderPassDescriptor{};
     QRectF sourceRect{0, 0, 1, 1};
     bool hasSwapChain{};
+
+    EdgeBlendData blendLeft, blendRight, blendTop, blendBottom;
   };
 
   const std::vector<WindowOutput>& windowOutputs() const noexcept
@@ -47,6 +55,7 @@ struct SCORE_PLUGIN_GFX_EXPORT MultiWindowNode : OutputNode
 
   void setRenderSize(QSize sz);
   void setSourceRect(int windowIndex, QRectF rect);
+  void setEdgeBlend(int windowIndex, int side, float width, float gamma);
 
   std::function<void(float)> onFps;
   // Called after all windows are created in createOutput(), before swap chains are initialized
