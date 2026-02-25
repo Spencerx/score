@@ -1838,16 +1838,23 @@ void OutputMappingItem::mousePressEvent(QGraphicsSceneMouseEvent* event)
   }
   else
   {
+    // Store anchor for precision move (Ctrl)
+    m_moveAnchorScene = event->scenePos();
+    m_posAtPress = pos();
     QGraphicsRectItem::mousePressEvent(event);
   }
 }
 
 void OutputMappingItem::mouseMoveEvent(QGraphicsSceneMouseEvent* event)
 {
+  const double scale = (event->modifiers() & Qt::ControlModifier) ? 0.1 : 1.0;
+
   if(m_blendHandle != BlendNone)
   {
     auto r = rect();
-    auto pos = event->pos();
+    // Apply precision: scale the delta from drag start
+    auto rawPos = event->pos();
+    auto pos = m_dragStart + (rawPos - m_dragStart) * scale;
 
     switch(m_blendHandle)
     {
@@ -1884,7 +1891,8 @@ void OutputMappingItem::mouseMoveEvent(QGraphicsSceneMouseEvent* event)
 
   if(m_resizeEdges != None)
   {
-    auto delta = event->scenePos() - m_dragStart;
+    auto rawDelta = event->scenePos() - m_dragStart;
+    auto delta = rawDelta * scale;
     QRectF r = m_rectStart;
     constexpr double minSize = 10.0;
 
@@ -1924,7 +1932,10 @@ void OutputMappingItem::mouseMoveEvent(QGraphicsSceneMouseEvent* event)
   }
   else
   {
-    QGraphicsRectItem::mouseMoveEvent(event);
+    // Precision move: bypass default handler, compute position manually
+    auto rawDelta = event->scenePos() - m_moveAnchorScene;
+    auto delta = rawDelta * scale;
+    setPos(m_posAtPress + delta);
   }
 }
 
@@ -2132,8 +2143,6 @@ void CornerWarpCanvas::updateLinesAndGrid()
 
 void CornerWarpCanvas::mousePressEvent(QMouseEvent* event)
 {
-  QGraphicsView::mousePressEvent(event);
-
   // Check if we're pressing on a handle
   auto scenePos = mapToScene(event->pos());
   m_dragHandle = -1;
@@ -2143,25 +2152,32 @@ void CornerWarpCanvas::mousePressEvent(QMouseEvent* event)
     {
       m_dragHandle = i;
       m_dragging = true;
+      m_handleAnchor = m_handles[i]->pos();
+      m_mouseAnchor = scenePos;
       break;
     }
   }
+
+  if(m_dragHandle < 0)
+    QGraphicsView::mousePressEvent(event);
 }
 
 void CornerWarpCanvas::mouseMoveEvent(QMouseEvent* event)
 {
-  QGraphicsView::mouseMoveEvent(event);
-
   if(m_dragging && m_dragHandle >= 0)
   {
+    const double scale = (event->modifiers() & Qt::ControlModifier) ? 0.1 : 1.0;
     const double s = m_canvasSize;
     const double margin = s * 0.125;
     const double inner = s * 0.75;
-    // Read handle position and convert back to UV
-    QPointF pos = m_handles[m_dragHandle]->pos();
+
+    auto scenePos = mapToScene(event->pos());
+    auto rawDelta = scenePos - m_mouseAnchor;
+    auto targetPos = m_handleAnchor + rawDelta * scale;
+
     // Clamp handle to canvas bounds so it can never be lost
-    double cx = qBound(0.0, pos.x(), s);
-    double cy = qBound(0.0, pos.y(), s);
+    double cx = qBound(0.0, targetPos.x(), s);
+    double cy = qBound(0.0, targetPos.y(), s);
     m_handles[m_dragHandle]->setPos(cx, cy);
     // Convert scene coords back to UV
     double u = (cx - margin) / inner;
@@ -2176,6 +2192,10 @@ void CornerWarpCanvas::mouseMoveEvent(QMouseEvent* event)
 
     if(onChanged)
       onChanged();
+  }
+  else
+  {
+    QGraphicsView::mouseMoveEvent(event);
   }
 }
 

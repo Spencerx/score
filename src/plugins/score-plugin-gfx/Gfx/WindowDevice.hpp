@@ -203,6 +203,8 @@ private:
   BlendHandle m_blendHandle{BlendNone};
   QPointF m_dragStart{};
   QRectF m_rectStart{};
+  QPointF m_moveAnchorScene{}; // scene pos at press for precision move
+  QPointF m_posAtPress{};      // item pos() at press
 };
 
 class OutputMappingCanvas final : public QGraphicsView
@@ -308,6 +310,8 @@ private:
   double m_canvasSize{200.0};
   bool m_dragging{false};
   int m_dragHandle{-1};
+  QPointF m_handleAnchor{};  // scene pos of handle at press
+  QPointF m_mouseAnchor{};   // mouse scene pos at press
 };
 
 class OutputPreviewWindows final : public QObject
