@@ -2693,6 +2693,17 @@ void PreviewWidget::setGlobalTestCard(const QImage& img)
   update();
 }
 
+void PreviewWidget::mouseDoubleClickEvent(QMouseEvent*)
+{
+  if(isFullScreen())
+    showNormal();
+  else
+    showFullScreen();
+
+  if(onFullscreenToggled)
+    onFullscreenToggled(m_index, isFullScreen());
+}
+
 // Build gradient stops approximating pow(1-t, gamma) opacity curve
 static void setGammaGradientStops(QLinearGradient& grad, float gamma)
 {
@@ -2869,6 +2880,10 @@ void OutputPreviewWindows::syncToMappings(const std::vector<OutputMapping>& mapp
   for(int i = oldCount; i < newCount; ++i)
   {
     auto* pw = new PreviewWidget(i, m_content);
+    pw->onFullscreenToggled = [this](int idx, bool fs) {
+      if(onFullscreenToggled)
+        onFullscreenToggled(idx, fs);
+    };
     m_windows.push_back(pw);
   }
 
@@ -2890,27 +2905,37 @@ void OutputPreviewWindows::syncToMappings(const std::vector<OutputMapping>& mapp
     {
       if(m.fullscreen)
       {
-        pw->showFullScreen();
+        if(!pw->isFullScreen())
+          pw->showFullScreen();
       }
       else
       {
         if(pw->isFullScreen())
           pw->showNormal();
 
-        pw->move(m.windowPosition);
-        pw->resize(m.windowSize);
-      }
+        // Set screen first (before move/resize) to avoid coordinate conflicts
+        if(m.screenIndex >= 0 && m.screenIndex < screens.size())
+        {
+          if(auto* wh = pw->windowHandle())
+          {
+            if(wh->screen() != screens[m.screenIndex])
+              wh->setScreen(screens[m.screenIndex]);
+          }
+        }
 
-      // Set screen via underlying QWindow (must be done after show)
-      if(m.screenIndex >= 0 && m.screenIndex < screens.size())
-      {
-        if(auto* wh = pw->windowHandle())
-          wh->setScreen(screens[m.screenIndex]);
+        // Only reposition/resize if actually different to avoid jitter
+        if(pw->pos() != m.windowPosition)
+          pw->move(m.windowPosition);
+        if(pw->size() != m.windowSize)
+          pw->resize(m.windowSize);
       }
     }
 
-    pw->show();
-    pw->raise();
+    if(!pw->isVisible())
+    {
+      pw->show();
+      pw->raise();
+    }
   }
 }
 
@@ -3305,6 +3330,29 @@ void WindowSettingsWidget::onModeChanged(int index)
     if(!m_preview)
     {
       m_preview = new OutputPreviewWindows(this);
+      m_preview->onFullscreenToggled = [this](int idx, bool fs) {
+        // Update the mapping item
+        if(m_canvas)
+        {
+          for(auto* item : m_canvas->scene()->items())
+          {
+            if(auto* mi = dynamic_cast<OutputMappingItem*>(item))
+            {
+              if(mi->outputIndex() == idx)
+              {
+                mi->fullscreen = fs;
+                break;
+              }
+            }
+          }
+        }
+        // Update checkbox if this is the selected output
+        if(idx == m_selectedOutput && m_fullscreenCheck)
+        {
+          const QSignalBlocker b(m_fullscreenCheck);
+          m_fullscreenCheck->setChecked(fs);
+        }
+      };
       if(m_previewContentCombo)
         m_preview->setPreviewContent(
             static_cast<PreviewContent>(m_previewContentCombo->currentIndex()));

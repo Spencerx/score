@@ -261,8 +261,12 @@ public:
   void setCornerWarp(const CornerWarp& warp);
   void setGlobalTestCard(const QImage& img);
 
+  // Called when fullscreen is toggled via double-click (index, isFullscreen)
+  std::function<void(int, bool)> onFullscreenToggled;
+
 protected:
   void paintEvent(QPaintEvent* event) override;
+  void mouseDoubleClickEvent(QMouseEvent* event) override;
 
 private:
   int m_index{};
@@ -324,6 +328,9 @@ public:
   void setPreviewContent(PreviewContent mode);
   void setInputResolution(QSize sz);
   void setSyncPositions(bool sync);
+
+  // Called when a preview window's fullscreen state is toggled via double-click
+  std::function<void(int, bool)> onFullscreenToggled;
 
 private:
   void closeAll();

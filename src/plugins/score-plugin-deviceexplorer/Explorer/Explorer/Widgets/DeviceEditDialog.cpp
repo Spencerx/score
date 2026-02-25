@@ -65,6 +65,7 @@ DeviceEditDialog::DeviceEditDialog(
   auto base_layout = new QHBoxLayout{this};
   setLayout(base_layout);
   setModal(true);
+  setWindowModality(Qt::WindowModal);
 
   m_splitter = new QSplitter{this};
   base_layout->addWidget(m_splitter);
