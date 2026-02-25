@@ -1,5 +1,8 @@
 #include <Gfx/Graph/MultiWindowNode.hpp>
 
+#include <algorithm>
+#include <cmath>
+
 #include <Gfx/Graph/NodeRenderer.hpp>
 #include <Gfx/Graph/RenderList.hpp>
 #include <Gfx/Graph/Window.hpp>
@@ -14,6 +17,85 @@
 
 namespace score::gfx
 {
+
+// Compute 3x3 homography matrix that maps the warped quad corners to the unit square.
+// Given 4 source points (warped corners) and 4 destination points (unit square corners),
+// this finds the inverse mapping: for screen position p, H*p gives the texture coordinate.
+// Uses the standard DLT (Direct Linear Transform) approach.
+static std::array<float, 12> computeHomographyUBO(const Gfx::CornerWarp& warp)
+{
+  // Source corners (the warped quad in output UV space)
+  double sx0 = warp.topLeft.x(),     sy0 = warp.topLeft.y();
+  double sx1 = warp.topRight.x(),    sy1 = warp.topRight.y();
+  double sx2 = warp.bottomRight.x(), sy2 = warp.bottomRight.y();
+  double sx3 = warp.bottomLeft.x(),  sy3 = warp.bottomLeft.y();
+
+  // Destination: unit square corners (TL=0,0 TR=1,0 BR=1,1 BL=0,1)
+  // We want the mapping FROM warped corners TO unit square,
+  // i.e. for a screen pixel at position (u,v), compute where in [0,1]² to sample.
+  // This is the inverse of the mapping unit_square -> warped_quad.
+
+  // First compute the forward mapping: unit square -> warped quad
+  // Using the standard 4-point perspective transform formulas
+  double dx1 = sx1 - sx2, dy1 = sy1 - sy2;
+  double dx2 = sx3 - sx2, dy2 = sy3 - sy2;
+  double dx3 = sx0 - sx1 + sx2 - sx3, dy3 = sy0 - sy1 + sy2 - sy3;
+
+  double denom = dx1 * dy2 - dx2 * dy1;
+  if(std::abs(denom) < 1e-12)
+  {
+    // Degenerate: return identity
+    return {1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0};
+  }
+
+  double g = (dx3 * dy2 - dx2 * dy3) / denom;
+  double h = (dx1 * dy3 - dx3 * dy1) / denom;
+
+  double a = sx1 - sx0 + g * sx1;
+  double b = sx3 - sx0 + h * sx3;
+  double c = sx0;
+  double d = sy1 - sy0 + g * sy1;
+  double e = sy3 - sy0 + h * sy3;
+  double f = sy0;
+  // g, h already computed, i = 1
+
+  // Forward matrix maps (u,v) in [0,1]² to warped position:
+  //   [a b c] [u]     [x*w]
+  //   [d e f] [v]  =  [y*w]
+  //   [g h 1] [1]     [w  ]
+  //
+  // We need the INVERSE: maps warped position back to [0,1]²
+
+  // Compute adjugate (transpose of cofactors) of 3x3 matrix
+  double A = e * 1.0 - f * h;
+  double B = -(b * 1.0 - c * h);
+  double C = b * f - c * e;
+  double D = -(d * 1.0 - f * g);
+  double E = a * 1.0 - c * g;
+  double F = -(a * f - c * d);
+  double G = d * h - e * g;
+  double H = -(a * h - b * g);
+  double I = a * e - b * d;
+
+  // Normalize so that I = 1 (or close to it)
+  if(std::abs(I) > 1e-12)
+  {
+    double invI = 1.0 / I;
+    A *= invI; B *= invI; C *= invI;
+    D *= invI; E *= invI; F *= invI;
+    G *= invI; H *= invI; I = 1.0;
+  }
+
+  // Pack into std140 format: 3 columns of vec4 (xyz used, w padding)
+  // Column-major: col0 = first column of matrix
+  // Matrix rows: row0 = [A, B, C], row1 = [D, E, F], row2 = [G, H, I]
+  // In the shader we do dot(row, p), so we store rows as columns for the dot products
+  return {
+    (float)A, (float)B, (float)C, 0.0f,  // homographyCol0 (row 0)
+    (float)D, (float)E, (float)F, 0.0f,  // homographyCol1 (row 1)
+    (float)G, (float)H, (float)I, 0.0f   // homographyCol2 (row 2)
+  };
+}
 
 // --- MultiWindowRenderer ---
 // Renders the input texture's sub-regions to multiple swap chains.
@@ -32,6 +114,7 @@ public:
     score::gfx::Pipeline pipeline;
     QRhiBuffer* uvRectUBO{};
     QRhiBuffer* blendUBO{};
+    QRhiBuffer* warpUBO{};
     std::array<score::gfx::Sampler, 1> samplers{};
     QRhiShaderResourceBindings* srb{};
     QRectF sourceRect{0, 0, 1, 1};
@@ -86,32 +169,71 @@ public:
           vec4 blendGammas; // left, right, top, bottom
       };
 
+      layout(std140, binding = 5) uniform WarpParams {
+          // mat3 stored as 3 x vec4 columns (std140 packing)
+          vec4 homographyCol0;
+          vec4 homographyCol1;
+          vec4 homographyCol2;
+          float warpEnabled;
+      };
+
       void main()
       {
+          vec2 tc = v_texcoord;
+
+          // Apply inverse homography if corner warp is active
+          if(warpEnabled > 0.5)
+          {
+              // Homography is computed in Y-down space (matching GUI).
+              // On OpenGL v_texcoord.y is flipped, so convert to Y-down first.
+#if !defined(QSHADER_SPIRV)
+              tc.y = 1.0 - tc.y;
+#endif
+              vec3 p = vec3(tc, 1.0);
+              vec3 warped = vec3(
+                  dot(vec3(homographyCol0.xyz), p),
+                  dot(vec3(homographyCol1.xyz), p),
+                  dot(vec3(homographyCol2.xyz), p)
+              );
+              tc = warped.xy / warped.z;
+
+              // Discard pixels outside the warped quad
+              if(tc.x < 0.0 || tc.x > 1.0 || tc.y < 0.0 || tc.y > 1.0)
+              {
+                  fragColor = vec4(0.0, 0.0, 0.0, 1.0);
+                  return;
+              }
+
+              // Convert back to native texture coord space for sourceRect lookup
+#if !defined(QSHADER_SPIRV)
+              tc.y = 1.0 - tc.y;
+#endif
+          }
+
           vec2 uv;
-          uv.x = sourceRect.x + v_texcoord.x * sourceRect.z;
+          uv.x = sourceRect.x + tc.x * sourceRect.z;
 #if defined(QSHADER_SPIRV)
-          uv.y = sourceRect.y + (1.0 - v_texcoord.y) * sourceRect.w;
+          uv.y = sourceRect.y + (1.0 - tc.y) * sourceRect.w;
 #else
           float texSrcY = 1.0 - sourceRect.y - sourceRect.w;
-          uv.y = texSrcY + v_texcoord.y * sourceRect.w;
+          uv.y = texSrcY + tc.y * sourceRect.w;
 #endif
           fragColor = texture(tex, uv);
 
-          // Soft-edge blending
+          // Soft-edge blending (applied in warped texture space)
           float alpha = 1.0;
           // Left edge
-          if(blendWidths.x > 0.0 && v_texcoord.x < blendWidths.x)
-              alpha *= pow(v_texcoord.x / blendWidths.x, blendGammas.x);
+          if(blendWidths.x > 0.0 && tc.x < blendWidths.x)
+              alpha *= pow(tc.x / blendWidths.x, blendGammas.x);
           // Right edge
-          if(blendWidths.y > 0.0 && v_texcoord.x > 1.0 - blendWidths.y)
-              alpha *= pow((1.0 - v_texcoord.x) / blendWidths.y, blendGammas.y);
+          if(blendWidths.y > 0.0 && tc.x > 1.0 - blendWidths.y)
+              alpha *= pow((1.0 - tc.x) / blendWidths.y, blendGammas.y);
           // Top edge
-          if(blendWidths.z > 0.0 && v_texcoord.y < blendWidths.z)
-              alpha *= pow(v_texcoord.y / blendWidths.z, blendGammas.z);
+          if(blendWidths.z > 0.0 && tc.y < blendWidths.z)
+              alpha *= pow(tc.y / blendWidths.z, blendGammas.z);
           // Bottom edge
-          if(blendWidths.w > 0.0 && v_texcoord.y > 1.0 - blendWidths.w)
-              alpha *= pow((1.0 - v_texcoord.y) / blendWidths.w, blendGammas.w);
+          if(blendWidths.w > 0.0 && tc.y > 1.0 - blendWidths.w)
+              alpha *= pow((1.0 - tc.y) / blendWidths.w, blendGammas.w);
 
           fragColor = vec4(fragColor.rgb * alpha, alpha);
       }
@@ -153,6 +275,22 @@ public:
           wo.blendLeft.gamma, wo.blendRight.gamma, wo.blendTop.gamma, wo.blendBottom.gamma};
       res.updateDynamicBuffer(pw.blendUBO, 0, sizeof(blendData), blendData);
 
+      // Create UBO for corner warp (3 vec4 columns + 1 float enabled = 52 bytes, round to 64)
+      pw.warpUBO = rhi.newBuffer(
+          QRhiBuffer::Dynamic, QRhiBuffer::UniformBuffer, 16 * sizeof(float));
+      pw.warpUBO->setName(QByteArray("MultiWindowRenderer::warpUBO_") + QByteArray::number(i));
+      pw.warpUBO->create();
+
+      {
+        float warpEnabled = wo.cornerWarp.isIdentity() ? 0.0f : 1.0f;
+        auto hom = computeHomographyUBO(wo.cornerWarp);
+        // 12 floats for 3 vec4 columns, then 1 float for warpEnabled (padded to vec4)
+        float warpData[16] = {};
+        std::copy(hom.begin(), hom.end(), warpData);
+        warpData[12] = warpEnabled;
+        res.updateDynamicBuffer(pw.warpUBO, 0, sizeof(warpData), warpData);
+      }
+
       // Create sampler pointing to input texture
       auto sampler = rhi.newSampler(
           QRhiSampler::Linear, QRhiSampler::Linear, QRhiSampler::None,
@@ -169,12 +307,16 @@ public:
         score::gfx::TextureRenderTarget rt;
         rt.renderPass = wo.renderPassDescriptor;
 
-        auto blendBinding = QRhiShaderResourceBinding::uniformBuffer(
-            4, QRhiShaderResourceBinding::FragmentStage, pw.blendUBO);
+        QRhiShaderResourceBinding extraBindings[2] = {
+          QRhiShaderResourceBinding::uniformBuffer(
+              4, QRhiShaderResourceBinding::FragmentStage, pw.blendUBO),
+          QRhiShaderResourceBinding::uniformBuffer(
+              5, QRhiShaderResourceBinding::FragmentStage, pw.warpUBO)
+        };
 
         pw.pipeline = score::gfx::buildPipeline(
             renderer, mesh, m_vertexS, m_fragmentS, rt, nullptr, pw.uvRectUBO,
-            pw.samplers, {&blendBinding, 1});
+            pw.samplers, {extraBindings, 2});
       }
     }
   }
@@ -197,6 +339,8 @@ public:
       pw.uvRectUBO = nullptr;
       delete pw.blendUBO;
       pw.blendUBO = nullptr;
+      delete pw.warpUBO;
+      pw.warpUBO = nullptr;
     }
     m_perWindow.clear();
     m_inputTarget.release();
@@ -264,6 +408,19 @@ private:
           wo.blendLeft.width, wo.blendRight.width, wo.blendTop.width, wo.blendBottom.width,
           wo.blendLeft.gamma, wo.blendRight.gamma, wo.blendTop.gamma, wo.blendBottom.gamma};
       res->updateDynamicBuffer(pw.blendUBO, 0, sizeof(blendData), blendData);
+    }
+
+    if(pw.warpUBO)
+    {
+      if(!res)
+        res = renderer.state.rhi->nextResourceUpdateBatch();
+
+      float warpEnabled = wo.cornerWarp.isIdentity() ? 0.0f : 1.0f;
+      auto hom = computeHomographyUBO(wo.cornerWarp);
+      float warpData[16] = {};
+      std::copy(hom.begin(), hom.end(), warpData);
+      warpData[12] = warpEnabled;
+      res->updateDynamicBuffer(pw.warpUBO, 0, sizeof(warpData), warpData);
     }
 
     cb.beginPass(rt, Qt::black, {1.0f, 0}, res);
@@ -355,6 +512,12 @@ void MultiWindowNode::setEdgeBlend(int windowIndex, int side, float width, float
   }
   target->width = width;
   target->gamma = gamma;
+}
+
+void MultiWindowNode::setCornerWarp(int windowIndex, const Gfx::CornerWarp& warp)
+{
+  if(windowIndex >= 0 && windowIndex < (int)m_windowOutputs.size())
+    m_windowOutputs[windowIndex].cornerWarp = warp;
 }
 
 void MultiWindowNode::startRendering()
@@ -538,6 +701,7 @@ void MultiWindowNode::initWindow(int index, GraphicsApi api)
   wo.blendRight = {mapping.blendRight.width, mapping.blendRight.gamma};
   wo.blendTop = {mapping.blendTop.width, mapping.blendTop.gamma};
   wo.blendBottom = {mapping.blendBottom.width, mapping.blendBottom.gamma};
+  wo.cornerWarp = mapping.cornerWarp;
 }
 
 void MultiWindowNode::createOutput(score::gfx::OutputConfiguration conf)

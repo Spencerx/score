@@ -9,6 +9,9 @@
 class QComboBox;
 class QCheckBox;
 class QDoubleSpinBox;
+class QGraphicsEllipseItem;
+class QGraphicsLineItem;
+class QGraphicsPolygonItem;
 class QLabel;
 class QStackedWidget;
 class QSpinBox;
@@ -43,6 +46,23 @@ struct EdgeBlend
   float gamma{2.2f};  // Blend curve exponent (1.0 = linear, 2.2 = typical projector)
 };
 
+struct CornerWarp
+{
+  QPointF topLeft{0.0, 0.0};
+  QPointF topRight{1.0, 0.0};
+  QPointF bottomLeft{0.0, 1.0};
+  QPointF bottomRight{1.0, 1.0};
+
+  bool isIdentity() const noexcept
+  {
+    constexpr double eps = 1e-6;
+    return qAbs(topLeft.x()) < eps && qAbs(topLeft.y()) < eps
+           && qAbs(topRight.x() - 1.0) < eps && qAbs(topRight.y()) < eps
+           && qAbs(bottomLeft.x()) < eps && qAbs(bottomLeft.y() - 1.0) < eps
+           && qAbs(bottomRight.x() - 1.0) < eps && qAbs(bottomRight.y() - 1.0) < eps;
+  }
+};
+
 struct OutputMapping
 {
   QRectF sourceRect{0.0, 0.0, 1.0, 1.0}; // UV coords in input texture
@@ -56,6 +76,9 @@ struct OutputMapping
   EdgeBlend blendRight;
   EdgeBlend blendTop;
   EdgeBlend blendBottom;
+
+  // 4-corner perspective warp (output UV space)
+  CornerWarp cornerWarp;
 };
 
 class WindowProtocolFactory final : public Device::ProtocolFactory
@@ -114,6 +137,8 @@ struct WindowSettings
 {
   WindowMode mode{WindowMode::Single};
   std::vector<OutputMapping> outputs;
+  int inputWidth{1920};
+  int inputHeight{1080};
 };
 
 // Graphics item for draggable/resizable output mapping quads
@@ -136,6 +161,9 @@ public:
   EdgeBlend blendRight;
   EdgeBlend blendTop;
   EdgeBlend blendBottom;
+
+  // 4-corner perspective warp
+  CornerWarp cornerWarp;
 
   // Called when item is moved or resized in the canvas
   std::function<void()> onChanged;
@@ -181,6 +209,7 @@ class OutputMappingCanvas final : public QGraphicsView
 {
 public:
   explicit OutputMappingCanvas(QWidget* parent = nullptr);
+  ~OutputMappingCanvas();
 
   void setMappings(const std::vector<OutputMapping>& mappings);
   std::vector<OutputMapping> getMappings() const;
@@ -227,6 +256,7 @@ public:
   void setOutputResolution(QSize sz);
   void setBlend(EdgeBlend left, EdgeBlend right, EdgeBlend top, EdgeBlend bottom);
   void setSourceRect(QRectF rect);
+  void setCornerWarp(const CornerWarp& warp);
   void setGlobalTestCard(const QImage& img);
 
 protected:
@@ -242,6 +272,42 @@ private:
   EdgeBlend m_blendRight;
   EdgeBlend m_blendTop;
   EdgeBlend m_blendBottom;
+  CornerWarp m_cornerWarp;
+};
+
+class CornerWarpCanvas final : public QGraphicsView
+{
+public:
+  explicit CornerWarpCanvas(QWidget* parent = nullptr);
+
+  void setWarp(const CornerWarp& warp);
+  CornerWarp getWarp() const;
+  void resetWarp();
+
+  void setEnabled(bool enabled);
+
+  std::function<void()> onChanged;
+
+protected:
+  void resizeEvent(QResizeEvent* event) override;
+  void mousePressEvent(QMouseEvent* event) override;
+  void mouseMoveEvent(QMouseEvent* event) override;
+  void mouseReleaseEvent(QMouseEvent* event) override;
+
+private:
+  void rebuildItems();
+  void updateLinesAndGrid();
+
+  QGraphicsScene m_scene;
+  QGraphicsRectItem* m_border{};
+  QGraphicsEllipseItem* m_handles[4]{};  // TL, TR, BL, BR
+  QGraphicsPolygonItem* m_quadOutline{};
+  std::vector<QGraphicsLineItem*> m_gridLines;
+
+  CornerWarp m_warp;
+  double m_canvasSize{200.0};
+  bool m_dragging{false};
+  int m_dragHandle{-1};
 };
 
 class OutputPreviewWindows final : public QObject
@@ -288,6 +354,7 @@ private:
   QStackedWidget* m_stack{};
 
   // Multi-window UI
+  CornerWarpCanvas* m_warpCanvas{};
   OutputMappingCanvas* m_canvas{};
   QSpinBox* m_winPosX{};
   QSpinBox* m_winPosY{};

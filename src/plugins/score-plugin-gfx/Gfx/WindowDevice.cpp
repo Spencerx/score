@@ -29,6 +29,7 @@
 #include <QComboBox>
 #include <QDoubleSpinBox>
 #include <QFormLayout>
+#include <QGraphicsEllipseItem>
 #include <QGraphicsSceneMouseEvent>
 #include <QGroupBox>
 #include <QGuiApplication>
@@ -36,6 +37,7 @@
 #include <QLabel>
 #include <QLineEdit>
 #include <QMenu>
+#include <QMouseEvent>
 #include <QPainter>
 #include <QPushButton>
 #include <QScreen>
@@ -1800,8 +1802,12 @@ QVariant OutputMappingItem::itemChange(GraphicsItemChange change, const QVariant
     auto r = rect();
     auto sr = scene()->sceneRect();
 
-    newPos.setX(qBound(sr.left() - r.left(), newPos.x(), sr.right() - r.right()));
-    newPos.setY(qBound(sr.top() - r.top(), newPos.y(), sr.bottom() - r.bottom()));
+    double minX = sr.left() - r.left();
+    double maxX = sr.right() - r.right();
+    double minY = sr.top() - r.top();
+    double maxY = sr.bottom() - r.bottom();
+    newPos.setX(qBound(std::min(minX, maxX), newPos.x(), std::max(minX, maxX)));
+    newPos.setY(qBound(std::min(minY, maxY), newPos.y(), std::max(minY, maxY)));
     return newPos;
   }
   if(change == ItemPositionHasChanged)
@@ -1965,6 +1971,221 @@ void OutputMappingItem::hoverMoveEvent(QGraphicsSceneHoverEvent* event)
   QGraphicsRectItem::hoverMoveEvent(event);
 }
 
+// --- CornerWarpCanvas implementation ---
+
+CornerWarpCanvas::CornerWarpCanvas(QWidget* parent)
+    : QGraphicsView(parent)
+{
+  setScene(&m_scene);
+  setFixedSize(210, 210);
+  m_scene.setSceneRect(0, 0, m_canvasSize, m_canvasSize);
+  setRenderHint(QPainter::Antialiasing);
+  setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+  setVerticalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+
+  // Border representing the unwarped output window (at 75% of canvas, centered)
+  const double margin = m_canvasSize * 0.125;
+  const double inner = m_canvasSize * 0.75;
+  m_border = m_scene.addRect(margin, margin, inner, inner, QPen(Qt::darkGray, 1));
+
+  // Quad outline
+  m_quadOutline = m_scene.addPolygon(QPolygonF(), QPen(QColor(100, 200, 255), 2));
+
+  // Corner handles: TL, TR, BL, BR
+  const double handleR = 6.0;
+  const QColor handleColors[4] = {
+      QColor(255, 80, 80), QColor(80, 255, 80),
+      QColor(80, 80, 255), QColor(255, 255, 80)};
+
+  for(int i = 0; i < 4; i++)
+  {
+    m_handles[i] = m_scene.addEllipse(
+        -handleR, -handleR, handleR * 2, handleR * 2,
+        QPen(Qt::white, 1), QBrush(handleColors[i]));
+    m_handles[i]->setFlag(QGraphicsItem::ItemIsMovable, true);
+    m_handles[i]->setZValue(10);
+  }
+
+  rebuildItems();
+}
+
+void CornerWarpCanvas::setWarp(const CornerWarp& warp)
+{
+  m_warp = warp;
+  rebuildItems();
+}
+
+CornerWarp CornerWarpCanvas::getWarp() const
+{
+  return m_warp;
+}
+
+void CornerWarpCanvas::resetWarp()
+{
+  m_warp = CornerWarp{};
+  rebuildItems();
+  if(onChanged)
+    onChanged();
+}
+
+void CornerWarpCanvas::setEnabled(bool enabled)
+{
+  for(int i = 0; i < 4; i++)
+    m_handles[i]->setFlag(QGraphicsItem::ItemIsMovable, enabled);
+  QGraphicsView::setEnabled(enabled);
+}
+
+void CornerWarpCanvas::resizeEvent(QResizeEvent* event)
+{
+  QGraphicsView::resizeEvent(event);
+  fitInView(m_scene.sceneRect(), Qt::KeepAspectRatio);
+}
+
+void CornerWarpCanvas::rebuildItems()
+{
+  const double s = m_canvasSize;
+  const double margin = s * 0.125;
+  const double inner = s * 0.75;
+
+  // Map UV [0,1] to the central 75% of the canvas (with 12.5% margin on each side)
+  auto toScene = [margin, inner](const QPointF& uv) -> QPointF {
+    return QPointF(margin + uv.x() * inner, margin + uv.y() * inner);
+  };
+
+  const QPointF corners[4] = {
+      toScene(m_warp.topLeft), toScene(m_warp.topRight),
+      toScene(m_warp.bottomLeft), toScene(m_warp.bottomRight)};
+
+  // Position handles (blocking scene change events during setup)
+  for(int i = 0; i < 4; i++)
+  {
+    m_handles[i]->setPos(corners[i]);
+  }
+
+  updateLinesAndGrid();
+}
+
+void CornerWarpCanvas::updateLinesAndGrid()
+{
+  const double s = m_canvasSize;
+
+  // Read current positions from handles
+  QPointF tl = m_handles[0]->pos();
+  QPointF tr = m_handles[1]->pos();
+  QPointF bl = m_handles[2]->pos();
+  QPointF br = m_handles[3]->pos();
+
+  // Update quad outline
+  QPolygonF quad;
+  quad << tl << tr << br << bl << tl;
+  m_quadOutline->setPolygon(quad);
+
+  // Update grid lines (4x4 bilinear subdivision)
+  for(auto* line : m_gridLines)
+  {
+    m_scene.removeItem(line);
+    delete line;
+  }
+  m_gridLines.clear();
+
+  constexpr int gridN = 4;
+  QPen gridPen(QColor(100, 200, 255, 80), 1);
+
+  auto bilinear = [&](double u, double v) -> QPointF {
+    return (1 - u) * (1 - v) * tl + u * (1 - v) * tr + (1 - u) * v * bl + u * v * br;
+  };
+
+  // Horizontal grid lines
+  for(int r = 1; r < gridN; r++)
+  {
+    double v = (double)r / gridN;
+    for(int c = 0; c < gridN; c++)
+    {
+      double u0 = (double)c / gridN;
+      double u1 = (double)(c + 1) / gridN;
+      auto* line = m_scene.addLine(
+          QLineF(bilinear(u0, v), bilinear(u1, v)), gridPen);
+      m_gridLines.push_back(line);
+    }
+  }
+
+  // Vertical grid lines
+  for(int c = 1; c < gridN; c++)
+  {
+    double u = (double)c / gridN;
+    for(int r = 0; r < gridN; r++)
+    {
+      double v0 = (double)r / gridN;
+      double v1 = (double)(r + 1) / gridN;
+      auto* line = m_scene.addLine(
+          QLineF(bilinear(u, v0), bilinear(u, v1)), gridPen);
+      m_gridLines.push_back(line);
+    }
+  }
+}
+
+// We override the scene's mouse events via event filter style by installing
+// on the viewport. Instead, use the simpler approach: check handle positions
+// on scene changes.
+// Actually, let's use a simpler approach: override mousePressEvent/mouseMoveEvent/mouseReleaseEvent
+// to track when handles move.
+
+void CornerWarpCanvas::mousePressEvent(QMouseEvent* event)
+{
+  QGraphicsView::mousePressEvent(event);
+
+  // Check if we're pressing on a handle
+  auto scenePos = mapToScene(event->pos());
+  m_dragHandle = -1;
+  for(int i = 0; i < 4; i++)
+  {
+    if(QLineF(scenePos, m_handles[i]->pos()).length() < 10.0)
+    {
+      m_dragHandle = i;
+      m_dragging = true;
+      break;
+    }
+  }
+}
+
+void CornerWarpCanvas::mouseMoveEvent(QMouseEvent* event)
+{
+  QGraphicsView::mouseMoveEvent(event);
+
+  if(m_dragging && m_dragHandle >= 0)
+  {
+    const double s = m_canvasSize;
+    const double margin = s * 0.125;
+    const double inner = s * 0.75;
+    // Read handle position and convert back to UV
+    QPointF pos = m_handles[m_dragHandle]->pos();
+    // Clamp handle to canvas bounds so it can never be lost
+    double cx = qBound(0.0, pos.x(), s);
+    double cy = qBound(0.0, pos.y(), s);
+    m_handles[m_dragHandle]->setPos(cx, cy);
+    // Convert scene coords back to UV
+    double u = (cx - margin) / inner;
+    double v = (cy - margin) / inner;
+
+    QPointF* corners[4] = {
+        &m_warp.topLeft, &m_warp.topRight,
+        &m_warp.bottomLeft, &m_warp.bottomRight};
+    *corners[m_dragHandle] = QPointF(u, v);
+
+    updateLinesAndGrid();
+
+    if(onChanged)
+      onChanged();
+  }
+}
+
+void CornerWarpCanvas::mouseReleaseEvent(QMouseEvent* event)
+{
+  QGraphicsView::mouseReleaseEvent(event);
+  m_dragging = false;
+  m_dragHandle = -1;
+}
+
 // --- OutputMappingCanvas implementation ---
 
 OutputMappingCanvas::OutputMappingCanvas(QWidget* parent)
@@ -1998,6 +2219,13 @@ OutputMappingCanvas::OutputMappingCanvas(QWidget* parent)
       }
     }
   });
+}
+
+OutputMappingCanvas::~OutputMappingCanvas()
+{
+  // Clear callbacks before the scene destroys items (which triggers selectionChanged)
+  onSelectionChanged = nullptr;
+  onItemGeometryChanged = nullptr;
 }
 
 void OutputMappingCanvas::resizeEvent(QResizeEvent* event)
@@ -2090,6 +2318,7 @@ void OutputMappingCanvas::setMappings(const std::vector<OutputMapping>& mappings
     item->blendRight = m.blendRight;
     item->blendTop = m.blendTop;
     item->blendBottom = m.blendBottom;
+    item->cornerWarp = m.cornerWarp;
     setupItemCallbacks(item);
     m_scene.addItem(item);
   }
@@ -2126,6 +2355,7 @@ std::vector<OutputMapping> OutputMappingCanvas::getMappings() const
     m.blendRight = item->blendRight;
     m.blendTop = item->blendTop;
     m.blendBottom = item->blendBottom;
+    m.cornerWarp = item->cornerWarp;
     result.push_back(m);
   }
   return result;
@@ -2186,65 +2416,134 @@ static QImage renderTestCard(int w, int h)
   QImage img(w, h, QImage::Format_RGB32);
   img.fill(Qt::black);
   QPainter p(&img);
-  p.setRenderHint(QPainter::Antialiasing, false);
 
-  constexpr int gridStep = 40;
+  const double cx = w * 0.5;
+  const double cy = h * 0.5;
+  const int gridStep = qMax(20, qMin(w, h) / 20);
+  const double dim = qMin(w, h);
 
-  // Layer 1: Checkerboard of 40px squares
+  // Layer 1: Checkerboard background
   {
+    p.setRenderHint(QPainter::Antialiasing, false);
     QColor light(60, 60, 60);
     QColor dark(30, 30, 30);
     for(int y = 0; y < h; y += gridStep)
-    {
       for(int x = 0; x < w; x += gridStep)
       {
         bool even = ((x / gridStep) + (y / gridStep)) % 2 == 0;
         p.fillRect(x, y, gridStep, gridStep, even ? dark : light);
       }
+  }
+
+  // Layer 2: Gradient bars — symmetric, centered
+  {
+    p.setRenderHint(QPainter::Antialiasing, false);
+    // Horizontal gradient bar (centered, 60% width, at ~70% height)
+    int barH = qMax(8, (int)(h * 0.03));
+    int barW = (int)(w * 0.6);
+    int barX = (w - barW) / 2;
+    int barY = (int)(h * 0.70);
+    // Black-to-white-to-black
+    for(int x = 0; x < barW; ++x)
+    {
+      double t = (double)x / qMax(1, barW - 1); // 0..1
+      double v = t < 0.5 ? t * 2.0 : (1.0 - t) * 2.0;
+      int gray = (int)(v * 255);
+      p.setPen(QColor(gray, gray, gray));
+      p.drawLine(barX + x, barY, barX + x, barY + barH - 1);
+    }
+
+    // Vertical gradient bar (centered, 60% height, at ~70% width from left, mirrored at 30%)
+    int vBarW = qMax(8, (int)(w * 0.02));
+    int vBarH = (int)(h * 0.6);
+    int vBarY = (h - vBarH) / 2;
+    int vBarX1 = (int)(w * 0.30) - vBarW / 2;
+    int vBarX2 = (int)(w * 0.70) - vBarW / 2;
+    for(int y = 0; y < vBarH; ++y)
+    {
+      double t = (double)y / qMax(1, vBarH - 1);
+      double v = t < 0.5 ? t * 2.0 : (1.0 - t) * 2.0;
+      int gray = (int)(v * 255);
+      p.setPen(QColor(gray, gray, gray));
+      p.drawLine(vBarX1, vBarY + y, vBarX1 + vBarW - 1, vBarY + y);
+      p.drawLine(vBarX2, vBarY + y, vBarX2 + vBarW - 1, vBarY + y);
     }
   }
 
-  // Layer 2: Horizontal gradient bar (bottom 30px) — black to white
+  // Layer 3: Color bars — rainbow strip centered horizontally, below center
   {
-    int barH = qMin(30, h / 10);
-    int barY = h - barH;
-    for(int x = 0; x < w; ++x)
+    p.setRenderHint(QPainter::Antialiasing, false);
+    const QColor colors[] = {
+        QColor(255, 0, 0),   QColor(255, 128, 0), QColor(255, 255, 0),
+        QColor(128, 255, 0), QColor(0, 255, 0),   QColor(0, 255, 128),
+        QColor(0, 255, 255), QColor(0, 128, 255), QColor(0, 0, 255),
+        QColor(128, 0, 255), QColor(255, 0, 255), QColor(255, 0, 128)};
+    int nColors = 12;
+    int stripW = (int)(w * 0.5);
+    int stripH = qMax(8, (int)(h * 0.04));
+    int stripX = (w - stripW) / 2;
+    int stripY = (int)(h * 0.62);
+    int cellW = stripW / nColors;
+    for(int i = 0; i < nColors; i++)
     {
-      int gray = x * 255 / qMax(1, w - 1);
-      p.setPen(QColor(gray, gray, gray));
-      p.drawLine(x, barY, x, h - 1);
+      int x0 = stripX + i * cellW;
+      int x1 = (i == nColors - 1) ? stripX + stripW : stripX + (i + 1) * cellW;
+      p.fillRect(x0, stripY, x1 - x0, stripH, colors[i]);
     }
 
-    // Vertical gradient bar (right 30px) — black to white top-to-bottom
-    int barW = qMin(30, w / 10);
-    int barX = w - barW;
-    for(int y = 0; y < h; ++y)
+    // Vertical color bars on left and right sides (mirrored)
+    int vStripH = (int)(h * 0.5);
+    int vStripW = qMax(8, (int)(w * 0.025));
+    int vStripY = (h - vStripH) / 2;
+    int vStripXL = (int)(w * 0.10);
+    int vStripXR = (int)(w * 0.90) - vStripW;
+    int cellH = vStripH / nColors;
+    for(int i = 0; i < nColors; i++)
     {
-      int gray = y * 255 / qMax(1, h - 1);
-      p.setPen(QColor(gray, gray, gray));
-      p.drawLine(barX, y, w - 1, y);
+      int y0 = vStripY + i * cellH;
+      int y1 = (i == nColors - 1) ? vStripY + vStripH : vStripY + (i + 1) * cellH;
+      p.fillRect(vStripXL, y0, vStripW, y1 - y0, colors[i]);
+      p.fillRect(vStripXR, y0, vStripW, y1 - y0, colors[i]);
     }
   }
 
-  // Layer 3: Diagonals (corner to corner)
+  p.setRenderHint(QPainter::Antialiasing, true);
+
+  // Layer 4: Circles centered on the image
   {
-    QPen diagPen(QColor(120, 120, 120), 1);
+    p.setBrush(Qt::NoBrush);
+    QPen circlePen(QColor(200, 200, 200, 120), qMax(1.0, dim * 0.002));
+    p.setPen(circlePen);
+    // Large circle (80% of min dimension)
+    double r1 = dim * 0.40;
+    p.drawEllipse(QPointF(cx, cy), r1, r1);
+    // Medium circle (50%)
+    double r2 = dim * 0.25;
+    p.drawEllipse(QPointF(cx, cy), r2, r2);
+    // Small circle (20%)
+    double r3 = dim * 0.10;
+    p.drawEllipse(QPointF(cx, cy), r3, r3);
+  }
+
+  // Layer 5: Diagonals (corner to corner) + center cross
+  {
+    QPen diagPen(QColor(120, 120, 120, 100), qMax(1.0, dim * 0.001));
     p.setPen(diagPen);
     p.drawLine(0, 0, w - 1, h - 1);
     p.drawLine(w - 1, 0, 0, h - 1);
-  }
 
-  // Layer 4: Center cross (horizontal + vertical through center)
-  {
-    QPen crossPen(QColor(200, 200, 200), 1);
+    // Dashed center cross
+    QPen crossPen(QColor(200, 200, 200, 160), qMax(1.0, dim * 0.001));
+    crossPen.setStyle(Qt::DashLine);
     p.setPen(crossPen);
     p.drawLine(0, h / 2, w - 1, h / 2);
     p.drawLine(w / 2, 0, w / 2, h - 1);
   }
 
-  // Layer 5: Grid lines on top
+  // Layer 6: Grid lines
   {
-    QPen gridPen(QColor(100, 100, 100), 1);
+    p.setRenderHint(QPainter::Antialiasing, false);
+    QPen gridPen(QColor(100, 100, 100, 80), 1);
     p.setPen(gridPen);
     for(int x = 0; x <= w; x += gridStep)
       p.drawLine(x, 0, x, h - 1);
@@ -2252,32 +2551,55 @@ static QImage renderTestCard(int w, int h)
       p.drawLine(0, y, w - 1, y);
   }
 
-  // Layer 6: Small crosshairs every 200px for fine alignment
+  // Layer 7: Crosshairs every 200px
   {
+    p.setRenderHint(QPainter::Antialiasing, false);
     QPen tickPen(QColor(180, 180, 180), 1);
     p.setPen(tickPen);
-    constexpr int tickLen = 6;
-    for(int y = 0; y < h; y += 200)
-    {
-      for(int x = 0; x < w; x += 200)
+    int tickLen = qMax(4, (int)(dim * 0.008));
+    for(int y = 0; y < h; y += gridStep * 5)
+      for(int x = 0; x < w; x += gridStep * 5)
       {
-        if(x == 0 && y == 0)
-          continue;
         p.drawLine(x - tickLen, y, x + tickLen, y);
         p.drawLine(x, y - tickLen, x, y + tickLen);
       }
-    }
   }
 
-  // Layer 7: Resolution label at center-top
+  p.setRenderHint(QPainter::Antialiasing, true);
+
+  // Layer 8: "ossia score" branding — above center, balanced around center line
   {
-    p.setPen(Qt::white);
-    QFont f = p.font();
-    f.setPixelSize(qMax(12, qMin(w, h) / 30));
+    QFont f(QStringLiteral("Ubuntu"), 1);
+    f.setPixelSize(qMax(16, (int)(dim * 0.06)));
+    f.setWeight(QFont::Bold);
     p.setFont(f);
-    QString label = QStringLiteral("%1 x %2").arg(w).arg(h);
-    QRect textRect(0, 10, w, qMin(w, h) / 15);
-    p.drawText(textRect, Qt::AlignHCenter | Qt::AlignTop, label);
+    p.setPen(QColor(0x03, 0xc3, 0xdd));
+
+    QFontMetrics fm(f);
+    double gap = fm.horizontalAdvance(QChar(' ')) * 0.6;
+    double wOssia = fm.horizontalAdvance(QStringLiteral("ossia"));
+    double wScore = fm.horizontalAdvance(QStringLiteral("score"));
+    int textY = (int)(cy - dim * 0.40);
+    int textH = (int)(dim * 0.10);
+
+    // Draw "ossia" to the left of center, "score" to the right
+    double xOssia = cx - gap * 0.5 - wOssia;
+    double xScore = cx + gap * 0.5;
+    QRectF rOssia(xOssia, textY, wOssia, textH);
+    QRectF rScore(xScore, textY, wScore, textH);
+    p.drawText(rOssia, Qt::AlignRight | Qt::AlignVCenter, QStringLiteral("ossia"));
+    p.drawText(rScore, Qt::AlignLeft | Qt::AlignVCenter, QStringLiteral("score"));
+  }
+
+  // Layer 9: Resolution label — below center
+  {
+    QFont f(QStringLiteral("Ubuntu"), 1);
+    f.setPixelSize(qMax(10, (int)(dim * 0.025)));
+    p.setFont(f);
+    p.setPen(QColor(200, 200, 200));
+    QString label = QStringLiteral("%1 \u00d7 %2").arg(w).arg(h);
+    QRect textRect(0, (int)(cy - dim * 0.31), w, (int)(dim * 0.06));
+    p.drawText(textRect, Qt::AlignHCenter | Qt::AlignVCenter, label);
   }
 
   return img;
@@ -2337,27 +2659,42 @@ void PreviewWidget::setSourceRect(QRectF rect)
   update();
 }
 
+void PreviewWidget::setCornerWarp(const CornerWarp& warp)
+{
+  m_cornerWarp = warp;
+  update();
+}
+
 void PreviewWidget::setGlobalTestCard(const QImage& img)
 {
   m_globalTestCard = img;
   update();
 }
 
+// Build gradient stops approximating pow(1-t, gamma) opacity curve
+static void setGammaGradientStops(QLinearGradient& grad, float gamma)
+{
+  constexpr int steps = 16;
+  constexpr int maxAlpha = 180;
+  for(int i = 0; i <= steps; i++)
+  {
+    double t = (double)i / steps;           // 0 = edge, 1 = interior
+    double alpha = std::pow(1.0 - t, gamma); // 1 at edge, 0 at interior
+    grad.setColorAt(t, QColor(0, 0, 0, (int)(alpha * maxAlpha)));
+  }
+}
+
 static void paintBlendGradients(
     QPainter& p, const QRect& r, const EdgeBlend& left, const EdgeBlend& right,
     const EdgeBlend& top, const EdgeBlend& bottom)
 {
-  QColor dark(0, 0, 0, 180);
-  QColor transparent(0, 0, 0, 0);
-
   p.setPen(Qt::NoPen);
 
   if(left.width > 0.f)
   {
     double w = left.width * r.width();
     QLinearGradient grad(r.left(), r.center().y(), r.left() + w, r.center().y());
-    grad.setColorAt(0, dark);
-    grad.setColorAt(1, transparent);
+    setGammaGradientStops(grad, left.gamma);
     p.setBrush(QBrush(grad));
     p.drawRect(QRectF(r.left(), r.top(), w, r.height()));
   }
@@ -2366,8 +2703,7 @@ static void paintBlendGradients(
   {
     double w = right.width * r.width();
     QLinearGradient grad(r.right(), r.center().y(), r.right() - w, r.center().y());
-    grad.setColorAt(0, dark);
-    grad.setColorAt(1, transparent);
+    setGammaGradientStops(grad, right.gamma);
     p.setBrush(QBrush(grad));
     p.drawRect(QRectF(r.right() - w, r.top(), w, r.height()));
   }
@@ -2376,8 +2712,7 @@ static void paintBlendGradients(
   {
     double h = top.width * r.height();
     QLinearGradient grad(r.center().x(), r.top(), r.center().x(), r.top() + h);
-    grad.setColorAt(0, dark);
-    grad.setColorAt(1, transparent);
+    setGammaGradientStops(grad, top.gamma);
     p.setBrush(QBrush(grad));
     p.drawRect(QRectF(r.left(), r.top(), r.width(), h));
   }
@@ -2386,8 +2721,7 @@ static void paintBlendGradients(
   {
     double h = bottom.width * r.height();
     QLinearGradient grad(r.center().x(), r.bottom(), r.center().x(), r.bottom() - h);
-    grad.setColorAt(0, dark);
-    grad.setColorAt(1, transparent);
+    setGammaGradientStops(grad, bottom.gamma);
     p.setBrush(QBrush(grad));
     p.drawRect(QRectF(r.left(), r.bottom() - h, r.width(), h));
   }
@@ -2396,6 +2730,24 @@ static void paintBlendGradients(
 void PreviewWidget::paintEvent(QPaintEvent*)
 {
   QPainter p(this);
+  p.fillRect(rect(), Qt::black);
+
+  // Apply corner warp transform if non-identity
+  if(!m_cornerWarp.isIdentity())
+  {
+    double w = width(), h = height();
+    QPolygonF src;
+    src << QPointF(0, 0) << QPointF(w, 0) << QPointF(w, h) << QPointF(0, h);
+    QPolygonF dst;
+    dst << QPointF(m_cornerWarp.topLeft.x() * w, m_cornerWarp.topLeft.y() * h)
+        << QPointF(m_cornerWarp.topRight.x() * w, m_cornerWarp.topRight.y() * h)
+        << QPointF(m_cornerWarp.bottomRight.x() * w, m_cornerWarp.bottomRight.y() * h)
+        << QPointF(m_cornerWarp.bottomLeft.x() * w, m_cornerWarp.bottomLeft.y() * h);
+
+    QTransform t;
+    if(QTransform::quadToQuad(src, dst, t))
+      p.setTransform(t);
+  }
 
   switch(m_content)
   {
@@ -2404,7 +2756,6 @@ void PreviewWidget::paintEvent(QPaintEvent*)
       return;
 
     case PreviewContent::PerOutputTestCard: {
-      // Render a test card at this output's resolution, scaled to fill the widget
       QImage card = renderTestCard(m_resolution.width(), m_resolution.height());
       p.drawImage(rect(), card);
       paintBlendGradients(p, rect(), m_blendLeft, m_blendRight, m_blendTop, m_blendBottom);
@@ -2412,7 +2763,6 @@ void PreviewWidget::paintEvent(QPaintEvent*)
     }
 
     case PreviewContent::GlobalTestCard: {
-      // Show this output's source rect portion of the global test card
       if(!m_globalTestCard.isNull())
       {
         QRectF srcPixels(
@@ -2436,7 +2786,6 @@ void PreviewWidget::paintEvent(QPaintEvent*)
 
       p.setPen(Qt::white);
 
-      // Large centered index number
       {
         QFont f = p.font();
         f.setPixelSize(qMax(32, qMin(width(), height()) / 3));
@@ -2445,7 +2794,6 @@ void PreviewWidget::paintEvent(QPaintEvent*)
         p.drawText(rect(), Qt::AlignCenter, QString::number(m_index));
       }
 
-      // Resolution text below center
       {
         QFont f = p.font();
         f.setPixelSize(qMax(14, qMin(width(), height()) / 12));
@@ -2512,6 +2860,7 @@ void OutputPreviewWindows::syncToMappings(const std::vector<OutputMapping>& mapp
     pw->setOutputResolution(m.windowSize);
     pw->setSourceRect(m.sourceRect);
     pw->setBlend(m.blendLeft, m.blendRight, m.blendTop, m.blendBottom);
+    pw->setCornerWarp(m.cornerWarp);
     if(!m_globalTestCard.isNull())
       pw->setGlobalTestCard(m_globalTestCard);
 
@@ -2617,8 +2966,14 @@ WindowSettingsWidget::WindowSettingsWidget(QWidget* parent)
       multiLayout->addLayout(resLayout);
     }
 
+    // Side-by-side: warp editor (left) + source rect canvas (right)
+    auto* canvasRow = new QHBoxLayout;
+    m_warpCanvas = new CornerWarpCanvas;
+    m_warpCanvas->setEnabled(false);
+    canvasRow->addWidget(m_warpCanvas);
     m_canvas = new OutputMappingCanvas;
-    multiLayout->addWidget(m_canvas);
+    canvasRow->addWidget(m_canvas, 1);
+    multiLayout->addLayout(canvasRow);
 
     // Add/Remove buttons
     auto* btnLayout = new QHBoxLayout;
@@ -2629,21 +2984,31 @@ WindowSettingsWidget::WindowSettingsWidget(QWidget* parent)
     multiLayout->addLayout(btnLayout);
 
     // Preview content combo
+    static int s_lastPreviewContent = 0;
     m_previewContentCombo = new QComboBox;
     m_previewContentCombo->addItem(tr("Black"));
     m_previewContentCombo->addItem(tr("Per-Output Test Card"));
     m_previewContentCombo->addItem(tr("Global Test Card"));
     m_previewContentCombo->addItem(tr("Output ID"));
+    m_previewContentCombo->setCurrentIndex(s_lastPreviewContent);
     btnLayout->addWidget(new QLabel(tr("Preview:")));
     btnLayout->addWidget(m_previewContentCombo);
 
+    auto* resetWarpBtn = new QPushButton(tr("Reset Warp"));
+    btnLayout->addWidget(resetWarpBtn);
+    connect(resetWarpBtn, &QPushButton::clicked, this, [this] {
+      if(m_warpCanvas)
+        m_warpCanvas->resetWarp();
+    });
+
     m_syncPositionsCheck = new QCheckBox(tr("Sync Positions"));
-    m_syncPositionsCheck->setChecked(true);
+    m_syncPositionsCheck->setChecked(false);
     m_syncPositionsCheck->setToolTip(tr("Synchronize preview window positions and sizes with the output mappings"));
     btnLayout->addWidget(m_syncPositionsCheck);
 
     connect(m_previewContentCombo, qOverload<int>(&QComboBox::currentIndexChanged),
         this, [this](int idx) {
+      s_lastPreviewContent = idx;
       if(m_preview)
         m_preview->setPreviewContent(static_cast<PreviewContent>(idx));
     });
@@ -2771,6 +3136,7 @@ WindowSettingsWidget::WindowSettingsWidget(QWidget* parent)
       row->addWidget(widthSpin);
       row->addWidget(new QLabel(tr("Gamma")));
       row->addWidget(gammaSpin);
+      row->addStretch(1);
       blendLayout->addRow(label, row);
     };
 
@@ -2792,14 +3158,36 @@ WindowSettingsWidget::WindowSettingsWidget(QWidget* parent)
     m_canvas->onSelectionChanged = [this, propGroup](int idx) {
       m_selectedOutput = idx;
       propGroup->setEnabled(idx >= 0);
+      if(m_warpCanvas)
+        m_warpCanvas->setEnabled(idx >= 0);
       if(idx >= 0)
         updatePropertiesFromSelection();
+      else if(m_warpCanvas)
+        m_warpCanvas->setWarp(CornerWarp{});
     };
 
     m_canvas->onItemGeometryChanged = [this](int idx) {
       if(idx == m_selectedOutput)
         updatePropertiesFromSelection();
       syncPreview();
+    };
+
+    // Wire corner warp canvas changes back to the selected item
+    m_warpCanvas->onChanged = [this] {
+      if(!m_canvas || m_selectedOutput < 0)
+        return;
+      for(auto* item : m_canvas->scene()->items())
+      {
+        if(auto* mi = dynamic_cast<OutputMappingItem*>(item))
+        {
+          if(mi->outputIndex() == m_selectedOutput)
+          {
+            mi->cornerWarp = m_warpCanvas->getWarp();
+            syncPreview();
+            return;
+          }
+        }
+      }
     };
 
     // Wire window property changes back to the selected canvas item
@@ -2948,6 +3336,9 @@ void WindowSettingsWidget::updatePropertiesFromSelection()
           m_blendBottomG->setValue(mi->blendBottom.gamma);
         }
 
+        if(m_warpCanvas)
+          m_warpCanvas->setWarp(mi->cornerWarp);
+
         updatePixelLabels();
         return;
       }
@@ -3069,6 +3460,12 @@ Device::DeviceSettings WindowSettingsWidget::getSettings() const
     set.outputs = m_canvas->getMappings();
   }
 
+  if(m_inputWidth && m_inputHeight)
+  {
+    set.inputWidth = m_inputWidth->value();
+    set.inputHeight = m_inputHeight->value();
+  }
+
   s.deviceSpecificSettings = QVariant::fromValue(set);
   return s;
 }
@@ -3081,6 +3478,12 @@ void WindowSettingsWidget::setSettings(const Device::DeviceSettings& settings)
     const auto set = settings.deviceSpecificSettings.value<WindowSettings>();
     m_modeCombo->setCurrentIndex((int)set.mode);
     m_stack->setCurrentIndex((int)set.mode);
+
+    if(m_inputWidth && m_inputHeight)
+    {
+      m_inputWidth->setValue(set.inputWidth);
+      m_inputHeight->setValue(set.inputHeight);
+    }
 
     if(set.mode == WindowMode::MultiWindow && m_canvas)
     {
@@ -3101,6 +3504,8 @@ void DataStreamReader::read(const Gfx::OutputMapping& n)
   m_stream << n.blendRight.width << n.blendRight.gamma;
   m_stream << n.blendTop.width << n.blendTop.gamma;
   m_stream << n.blendBottom.width << n.blendBottom.gamma;
+  m_stream << n.cornerWarp.topLeft << n.cornerWarp.topRight
+           << n.cornerWarp.bottomLeft << n.cornerWarp.bottomRight;
 }
 
 template <>
@@ -3112,16 +3517,19 @@ void DataStreamWriter::write(Gfx::OutputMapping& n)
   m_stream >> n.blendRight.width >> n.blendRight.gamma;
   m_stream >> n.blendTop.width >> n.blendTop.gamma;
   m_stream >> n.blendBottom.width >> n.blendBottom.gamma;
+  m_stream >> n.cornerWarp.topLeft >> n.cornerWarp.topRight
+      >> n.cornerWarp.bottomLeft >> n.cornerWarp.bottomRight;
 }
 
 template <>
 void DataStreamReader::read(const Gfx::WindowSettings& n)
 {
-  m_stream << (int32_t)3; // version tag
+  m_stream << (int32_t)5; // version tag
   m_stream << (int32_t)n.mode;
   m_stream << (int32_t)n.outputs.size();
   for(const auto& o : n.outputs)
     read(o);
+  m_stream << (int32_t)n.inputWidth << (int32_t)n.inputHeight;
   insertDelimiter();
 }
 
@@ -3159,7 +3567,41 @@ void DataStreamWriter::write(Gfx::WindowSettings& n)
     m_stream >> count;
     n.outputs.resize(count);
     for(auto& o : n.outputs)
+    {
+      // Version 3: blend data but no corner warp
+      m_stream >> o.sourceRect >> o.screenIndex >> o.windowPosition >> o.windowSize
+          >> o.fullscreen;
+      m_stream >> o.blendLeft.width >> o.blendLeft.gamma;
+      m_stream >> o.blendRight.width >> o.blendRight.gamma;
+      m_stream >> o.blendTop.width >> o.blendTop.gamma;
+      m_stream >> o.blendBottom.width >> o.blendBottom.gamma;
+    }
+  }
+  else if(version == 4)
+  {
+    int32_t mode{};
+    m_stream >> mode;
+    n.mode = (Gfx::WindowMode)mode;
+    int32_t count{};
+    m_stream >> count;
+    n.outputs.resize(count);
+    for(auto& o : n.outputs)
       write(o);
+  }
+  else if(version == 5)
+  {
+    int32_t mode{};
+    m_stream >> mode;
+    n.mode = (Gfx::WindowMode)mode;
+    int32_t count{};
+    m_stream >> count;
+    n.outputs.resize(count);
+    for(auto& o : n.outputs)
+      write(o);
+    int32_t inW{}, inH{};
+    m_stream >> inW >> inH;
+    n.inputWidth = inW;
+    n.inputHeight = inH;
   }
   checkDelimiter();
 }
@@ -3201,6 +3643,21 @@ void JSONReader::read(const Gfx::OutputMapping& n)
   writeBlend("BlendRight", n.blendRight);
   writeBlend("BlendTop", n.blendTop);
   writeBlend("BlendBottom", n.blendBottom);
+
+  if(!n.cornerWarp.isIdentity())
+  {
+    stream.Key("CornerWarp");
+    stream.StartArray();
+    stream.Double(n.cornerWarp.topLeft.x());
+    stream.Double(n.cornerWarp.topLeft.y());
+    stream.Double(n.cornerWarp.topRight.x());
+    stream.Double(n.cornerWarp.topRight.y());
+    stream.Double(n.cornerWarp.bottomLeft.x());
+    stream.Double(n.cornerWarp.bottomLeft.y());
+    stream.Double(n.cornerWarp.bottomRight.x());
+    stream.Double(n.cornerWarp.bottomRight.y());
+    stream.EndArray();
+  }
 
   stream.EndObject();
 }
@@ -3248,6 +3705,18 @@ void JSONWriter::write(Gfx::OutputMapping& n)
   readBlend("BlendRight", n.blendRight);
   readBlend("BlendTop", n.blendTop);
   readBlend("BlendBottom", n.blendBottom);
+
+  if(auto cw = obj.tryGet("CornerWarp"))
+  {
+    auto arr = cw->toArray();
+    if(arr.Size() == 8)
+    {
+      n.cornerWarp.topLeft = {arr[0].GetDouble(), arr[1].GetDouble()};
+      n.cornerWarp.topRight = {arr[2].GetDouble(), arr[3].GetDouble()};
+      n.cornerWarp.bottomLeft = {arr[4].GetDouble(), arr[5].GetDouble()};
+      n.cornerWarp.bottomRight = {arr[6].GetDouble(), arr[7].GetDouble()};
+    }
+  }
 }
 
 template <>
@@ -3255,6 +3724,8 @@ void JSONReader::read(const Gfx::WindowSettings& n)
 {
   obj["Mode"] = (int)n.mode;
   obj["Outputs"] = n.outputs;
+  obj["InputWidth"] = n.inputWidth;
+  obj["InputHeight"] = n.inputHeight;
 }
 
 template <>
@@ -3279,6 +3750,10 @@ void JSONWriter::write(Gfx::WindowSettings& n)
       w.write(n.outputs[i]);
     }
   }
+  if(auto v = obj.tryGet("InputWidth"))
+    n.inputWidth = v->toInt();
+  if(auto v = obj.tryGet("InputHeight"))
+    n.inputHeight = v->toInt();
 }
 
 SCORE_SERALIZE_DATASTREAM_DEFINE(Gfx::WindowSettings);

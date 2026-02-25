@@ -46,6 +46,8 @@ struct SCORE_PLUGIN_GFX_EXPORT MultiWindowNode : OutputNode
     bool hasSwapChain{};
 
     EdgeBlendData blendLeft, blendRight, blendTop, blendBottom;
+
+    Gfx::CornerWarp cornerWarp;
   };
 
   const std::vector<WindowOutput>& windowOutputs() const noexcept
@@ -56,6 +58,7 @@ struct SCORE_PLUGIN_GFX_EXPORT MultiWindowNode : OutputNode
   void setRenderSize(QSize sz);
   void setSourceRect(int windowIndex, QRectF rect);
   void setEdgeBlend(int windowIndex, int side, float width, float gamma);
+  void setCornerWarp(int windowIndex, const Gfx::CornerWarp& warp);
 
   std::function<void(float)> onFps;
   // Called after all windows are created in createOutput(), before swap chains are initialized
