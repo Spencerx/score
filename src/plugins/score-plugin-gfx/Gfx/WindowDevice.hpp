@@ -122,13 +122,13 @@ public:
   score::gfx::Window* window() const noexcept;
   W_SLOT(window)
 
-private:
   void addAddress(const Device::FullAddressSettings& settings) override;
   void setupContextMenu(QMenu&) const override;
   ossia::net::device_base* getDevice() const override { return m_dev.get(); }
   void disconnect() override;
   bool reconnect() override;
 
+private:
   gfx_protocol_base* m_protocol{};
   mutable std::unique_ptr<ossia::net::device_base> m_dev;
 };
@@ -339,7 +339,8 @@ private:
 class WindowSettingsWidget final : public Device::ProtocolSettingsWidget
 {
 public:
-  WindowSettingsWidget(QWidget* parent = nullptr);
+  explicit WindowSettingsWidget(QWidget* parent = nullptr);
+  ~WindowSettingsWidget();
 
   Device::DeviceSettings getSettings() const override;
 

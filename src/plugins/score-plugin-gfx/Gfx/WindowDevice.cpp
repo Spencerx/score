@@ -2,6 +2,8 @@
 
 #include <State/Widgets/AddressFragmentLineEdit.hpp>
 
+#include <Explorer/DocumentPlugin/DeviceDocumentPlugin.hpp>
+
 #include <Scenario/Document/ScenarioDocument/ScenarioDocumentView.hpp>
 
 #include <Gfx/GfxApplicationPlugin.hpp>
@@ -3270,6 +3272,23 @@ WindowSettingsWidget::WindowSettingsWidget(QWidget* parent)
   setLayout(layout);
 }
 
+WindowSettingsWidget::~WindowSettingsWidget()
+{
+  if(this->m_modeCombo->currentIndex() == (int)WindowMode::MultiWindow)
+  {
+    if(auto doc = score::GUIAppContext().currentDocument())
+    {
+      auto& p = doc->plugin<Explorer::DeviceDocumentPlugin>();
+      auto& dl = p.list();
+      if(auto* self = dl.findDevice(this->m_deviceNameEdit->text()))
+      {
+        QMetaObject::invokeMethod(
+            safe_cast<WindowDevice*>(self), &WindowDevice::reconnect);
+      }
+    }
+  }
+}
+
 void WindowSettingsWidget::onModeChanged(int index)
 {
   m_stack->setCurrentIndex(index);
@@ -3505,6 +3524,19 @@ void WindowSettingsWidget::setSettings(const Device::DeviceSettings& settings)
       m_inputHeight->setValue(set.inputHeight);
     }
 
+    if(this->m_modeCombo->currentIndex() == (int)WindowMode::MultiWindow)
+    {
+      if(auto doc = score::GUIAppContext().currentDocument())
+      {
+        auto& p = doc->plugin<Explorer::DeviceDocumentPlugin>();
+        auto& dl = p.list();
+        if(auto* self = dl.findDevice(settings.name))
+        {
+          safe_cast<WindowDevice*>(self)->disconnect();
+        }
+      }
+    }
+
     if(set.mode == WindowMode::MultiWindow && m_canvas)
     {
       m_canvas->setMappings(set.outputs);
@@ -3512,7 +3544,6 @@ void WindowSettingsWidget::setSettings(const Device::DeviceSettings& settings)
     }
   }
 }
-
 }
 
 template <>
