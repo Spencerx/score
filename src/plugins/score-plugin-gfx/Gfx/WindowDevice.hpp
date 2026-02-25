@@ -209,6 +209,63 @@ private:
   double m_canvasHeight{300.0};
 };
 
+enum class PreviewContent
+{
+  Black,
+  PerOutputTestCard,
+  GlobalTestCard,
+  OutputIdentification
+};
+
+class PreviewWidget final : public QWidget
+{
+public:
+  explicit PreviewWidget(int index, PreviewContent content, QWidget* parent = nullptr);
+
+  void setOutputIndex(int idx);
+  void setPreviewContent(PreviewContent mode);
+  void setOutputResolution(QSize sz);
+  void setBlend(EdgeBlend left, EdgeBlend right, EdgeBlend top, EdgeBlend bottom);
+  void setSourceRect(QRectF rect);
+  void setGlobalTestCard(const QImage& img);
+
+protected:
+  void paintEvent(QPaintEvent* event) override;
+
+private:
+  int m_index{};
+  PreviewContent m_content{PreviewContent::Black};
+  QSize m_resolution{1280, 720};
+  QRectF m_sourceRect{0, 0, 1, 1};
+  QImage m_globalTestCard;
+  EdgeBlend m_blendLeft;
+  EdgeBlend m_blendRight;
+  EdgeBlend m_blendTop;
+  EdgeBlend m_blendBottom;
+};
+
+class OutputPreviewWindows final : public QObject
+{
+public:
+  explicit OutputPreviewWindows(QObject* parent = nullptr);
+  ~OutputPreviewWindows();
+
+  void syncToMappings(const std::vector<OutputMapping>& mappings);
+  void setPreviewContent(PreviewContent mode);
+  void setInputResolution(QSize sz);
+  void setSyncPositions(bool sync);
+
+private:
+  void closeAll();
+  void rebuildGlobalTestCard();
+
+  std::vector<PreviewWidget*> m_windows;
+  PreviewContent m_content{PreviewContent::Black};
+  QSize m_inputResolution{1920, 1080};
+  QImage m_globalTestCard;
+  bool m_syncPositions{true};
+};
+
 class WindowSettingsWidget final : public Device::ProtocolSettingsWidget
 {
 public:
@@ -258,6 +315,12 @@ private:
   QDoubleSpinBox* m_blendBottomG{};
 
   int m_selectedOutput{-1};
+
+  // Preview windows
+  OutputPreviewWindows* m_preview{};
+  QComboBox* m_previewContentCombo{};
+  QCheckBox* m_syncPositionsCheck{};
+  void syncPreview();
 };
 
 }

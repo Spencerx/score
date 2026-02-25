@@ -39,6 +39,7 @@
 #include <QPainter>
 #include <QPushButton>
 #include <QScreen>
+#include <QScrollArea>
 #include <QSpinBox>
 #include <QStackedWidget>
 #include <QUrl>
@@ -2143,6 +2144,10 @@ void OutputMappingCanvas::addOutput()
   auto* item = new OutputMappingItem(count, QRectF(x, y, 100, 75));
   setupItemCallbacks(item);
   m_scene.addItem(item);
+
+  // Auto-select the new item so that property auto-match runs
+  m_scene.clearSelection();
+  item->setSelected(true);
 }
 
 void OutputMappingCanvas::removeSelectedOutput()
@@ -2169,6 +2174,401 @@ void OutputMappingCanvas::removeSelectedOutput()
 
   for(int i = 0; i < remaining.size(); ++i)
     remaining[i]->setOutputIndex(i);
+}
+
+// --- Test card rendering ---
+
+static QImage renderTestCard(int w, int h)
+{
+  if(w < 1 || h < 1)
+    return {};
+
+  QImage img(w, h, QImage::Format_RGB32);
+  img.fill(Qt::black);
+  QPainter p(&img);
+  p.setRenderHint(QPainter::Antialiasing, false);
+
+  constexpr int gridStep = 40;
+
+  // Layer 1: Checkerboard of 40px squares
+  {
+    QColor light(60, 60, 60);
+    QColor dark(30, 30, 30);
+    for(int y = 0; y < h; y += gridStep)
+    {
+      for(int x = 0; x < w; x += gridStep)
+      {
+        bool even = ((x / gridStep) + (y / gridStep)) % 2 == 0;
+        p.fillRect(x, y, gridStep, gridStep, even ? dark : light);
+      }
+    }
+  }
+
+  // Layer 2: Horizontal gradient bar (bottom 30px) — black to white
+  {
+    int barH = qMin(30, h / 10);
+    int barY = h - barH;
+    for(int x = 0; x < w; ++x)
+    {
+      int gray = x * 255 / qMax(1, w - 1);
+      p.setPen(QColor(gray, gray, gray));
+      p.drawLine(x, barY, x, h - 1);
+    }
+
+    // Vertical gradient bar (right 30px) — black to white top-to-bottom
+    int barW = qMin(30, w / 10);
+    int barX = w - barW;
+    for(int y = 0; y < h; ++y)
+    {
+      int gray = y * 255 / qMax(1, h - 1);
+      p.setPen(QColor(gray, gray, gray));
+      p.drawLine(barX, y, w - 1, y);
+    }
+  }
+
+  // Layer 3: Diagonals (corner to corner)
+  {
+    QPen diagPen(QColor(120, 120, 120), 1);
+    p.setPen(diagPen);
+    p.drawLine(0, 0, w - 1, h - 1);
+    p.drawLine(w - 1, 0, 0, h - 1);
+  }
+
+  // Layer 4: Center cross (horizontal + vertical through center)
+  {
+    QPen crossPen(QColor(200, 200, 200), 1);
+    p.setPen(crossPen);
+    p.drawLine(0, h / 2, w - 1, h / 2);
+    p.drawLine(w / 2, 0, w / 2, h - 1);
+  }
+
+  // Layer 5: Grid lines on top
+  {
+    QPen gridPen(QColor(100, 100, 100), 1);
+    p.setPen(gridPen);
+    for(int x = 0; x <= w; x += gridStep)
+      p.drawLine(x, 0, x, h - 1);
+    for(int y = 0; y <= h; y += gridStep)
+      p.drawLine(0, y, w - 1, y);
+  }
+
+  // Layer 6: Small crosshairs every 200px for fine alignment
+  {
+    QPen tickPen(QColor(180, 180, 180), 1);
+    p.setPen(tickPen);
+    constexpr int tickLen = 6;
+    for(int y = 0; y < h; y += 200)
+    {
+      for(int x = 0; x < w; x += 200)
+      {
+        if(x == 0 && y == 0)
+          continue;
+        p.drawLine(x - tickLen, y, x + tickLen, y);
+        p.drawLine(x, y - tickLen, x, y + tickLen);
+      }
+    }
+  }
+
+  // Layer 7: Resolution label at center-top
+  {
+    p.setPen(Qt::white);
+    QFont f = p.font();
+    f.setPixelSize(qMax(12, qMin(w, h) / 30));
+    p.setFont(f);
+    QString label = QStringLiteral("%1 x %2").arg(w).arg(h);
+    QRect textRect(0, 10, w, qMin(w, h) / 15);
+    p.drawText(textRect, Qt::AlignHCenter | Qt::AlignTop, label);
+  }
+
+  return img;
+}
+
+// --- PreviewWidget implementation ---
+
+static QColor previewColorForIndex(int index)
+{
+  static constexpr QColor colors[] = {
+      QColor(30, 60, 180),  QColor(180, 30, 30),  QColor(30, 150, 30),
+      QColor(180, 150, 30), QColor(150, 30, 150),  QColor(30, 150, 150),
+      QColor(200, 100, 30), QColor(100, 30, 200),
+  };
+  return colors[index % 8];
+}
+
+PreviewWidget::PreviewWidget(int index, PreviewContent content, QWidget* parent)
+    : QWidget{parent, Qt::Window | Qt::WindowStaysOnTopHint}
+    , m_index{index}
+    , m_content{content}
+{
+  setWindowTitle(QStringLiteral("Output %1").arg(index));
+}
+
+void PreviewWidget::setOutputIndex(int idx)
+{
+  m_index = idx;
+  setWindowTitle(QStringLiteral("Output %1").arg(idx));
+  update();
+}
+
+void PreviewWidget::setPreviewContent(PreviewContent mode)
+{
+  m_content = mode;
+  update();
+}
+
+void PreviewWidget::setOutputResolution(QSize sz)
+{
+  m_resolution = sz;
+  update();
+}
+
+void PreviewWidget::setBlend(EdgeBlend left, EdgeBlend right, EdgeBlend top, EdgeBlend bottom)
+{
+  m_blendLeft = left;
+  m_blendRight = right;
+  m_blendTop = top;
+  m_blendBottom = bottom;
+  update();
+}
+
+void PreviewWidget::setSourceRect(QRectF rect)
+{
+  m_sourceRect = rect;
+  update();
+}
+
+void PreviewWidget::setGlobalTestCard(const QImage& img)
+{
+  m_globalTestCard = img;
+  update();
+}
+
+static void paintBlendGradients(
+    QPainter& p, const QRect& r, const EdgeBlend& left, const EdgeBlend& right,
+    const EdgeBlend& top, const EdgeBlend& bottom)
+{
+  QColor dark(0, 0, 0, 180);
+  QColor transparent(0, 0, 0, 0);
+
+  p.setPen(Qt::NoPen);
+
+  if(left.width > 0.f)
+  {
+    double w = left.width * r.width();
+    QLinearGradient grad(r.left(), r.center().y(), r.left() + w, r.center().y());
+    grad.setColorAt(0, dark);
+    grad.setColorAt(1, transparent);
+    p.setBrush(QBrush(grad));
+    p.drawRect(QRectF(r.left(), r.top(), w, r.height()));
+  }
+
+  if(right.width > 0.f)
+  {
+    double w = right.width * r.width();
+    QLinearGradient grad(r.right(), r.center().y(), r.right() - w, r.center().y());
+    grad.setColorAt(0, dark);
+    grad.setColorAt(1, transparent);
+    p.setBrush(QBrush(grad));
+    p.drawRect(QRectF(r.right() - w, r.top(), w, r.height()));
+  }
+
+  if(top.width > 0.f)
+  {
+    double h = top.width * r.height();
+    QLinearGradient grad(r.center().x(), r.top(), r.center().x(), r.top() + h);
+    grad.setColorAt(0, dark);
+    grad.setColorAt(1, transparent);
+    p.setBrush(QBrush(grad));
+    p.drawRect(QRectF(r.left(), r.top(), r.width(), h));
+  }
+
+  if(bottom.width > 0.f)
+  {
+    double h = bottom.width * r.height();
+    QLinearGradient grad(r.center().x(), r.bottom(), r.center().x(), r.bottom() - h);
+    grad.setColorAt(0, dark);
+    grad.setColorAt(1, transparent);
+    p.setBrush(QBrush(grad));
+    p.drawRect(QRectF(r.left(), r.bottom() - h, r.width(), h));
+  }
+}
+
+void PreviewWidget::paintEvent(QPaintEvent*)
+{
+  QPainter p(this);
+
+  switch(m_content)
+  {
+    case PreviewContent::Black:
+      p.fillRect(rect(), Qt::black);
+      return;
+
+    case PreviewContent::PerOutputTestCard: {
+      // Render a test card at this output's resolution, scaled to fill the widget
+      QImage card = renderTestCard(m_resolution.width(), m_resolution.height());
+      p.drawImage(rect(), card);
+      paintBlendGradients(p, rect(), m_blendLeft, m_blendRight, m_blendTop, m_blendBottom);
+      return;
+    }
+
+    case PreviewContent::GlobalTestCard: {
+      // Show this output's source rect portion of the global test card
+      if(!m_globalTestCard.isNull())
+      {
+        QRectF srcPixels(
+            m_sourceRect.x() * m_globalTestCard.width(),
+            m_sourceRect.y() * m_globalTestCard.height(),
+            m_sourceRect.width() * m_globalTestCard.width(),
+            m_sourceRect.height() * m_globalTestCard.height());
+        p.drawImage(QRectF(rect()), m_globalTestCard, srcPixels);
+      }
+      else
+      {
+        p.fillRect(rect(), Qt::black);
+      }
+      paintBlendGradients(p, rect(), m_blendLeft, m_blendRight, m_blendTop, m_blendBottom);
+      return;
+    }
+
+    case PreviewContent::OutputIdentification: {
+      p.fillRect(rect(), previewColorForIndex(m_index));
+      paintBlendGradients(p, rect(), m_blendLeft, m_blendRight, m_blendTop, m_blendBottom);
+
+      p.setPen(Qt::white);
+
+      // Large centered index number
+      {
+        QFont f = p.font();
+        f.setPixelSize(qMax(32, qMin(width(), height()) / 3));
+        f.setBold(true);
+        p.setFont(f);
+        p.drawText(rect(), Qt::AlignCenter, QString::number(m_index));
+      }
+
+      // Resolution text below center
+      {
+        QFont f = p.font();
+        f.setPixelSize(qMax(14, qMin(width(), height()) / 12));
+        f.setBold(false);
+        p.setFont(f);
+        auto text = QStringLiteral("%1 x %2").arg(m_resolution.width()).arg(m_resolution.height());
+        QRect lower = rect();
+        lower.setTop(rect().center().y() + qMin(width(), height()) / 5);
+        p.drawText(lower, Qt::AlignHCenter | Qt::AlignTop, text);
+      }
+      return;
+    }
+  }
+}
+
+// --- OutputPreviewWindows implementation ---
+
+OutputPreviewWindows::OutputPreviewWindows(QObject* parent)
+    : QObject{parent}
+{
+}
+
+OutputPreviewWindows::~OutputPreviewWindows()
+{
+  closeAll();
+}
+
+void OutputPreviewWindows::closeAll()
+{
+  qDeleteAll(m_windows);
+  m_windows.clear();
+}
+
+void OutputPreviewWindows::syncToMappings(const std::vector<OutputMapping>& mappings)
+{
+  // Ensure global test card exists
+  if(m_globalTestCard.isNull())
+    rebuildGlobalTestCard();
+
+  const int newCount = (int)mappings.size();
+  const int oldCount = (int)m_windows.size();
+
+  // Remove excess windows
+  while((int)m_windows.size() > newCount)
+  {
+    delete m_windows.back();
+    m_windows.pop_back();
+  }
+
+  // Add new windows
+  for(int i = oldCount; i < newCount; ++i)
+  {
+    auto* pw = new PreviewWidget(i, m_content);
+    m_windows.push_back(pw);
+  }
+
+  // Update positions/sizes/screens for all windows
+  const auto& screens = qApp->screens();
+  for(int i = 0; i < newCount; ++i)
+  {
+    auto* pw = m_windows[i];
+    const auto& m = mappings[i];
+
+    pw->setOutputResolution(m.windowSize);
+    pw->setSourceRect(m.sourceRect);
+    pw->setBlend(m.blendLeft, m.blendRight, m.blendTop, m.blendBottom);
+    if(!m_globalTestCard.isNull())
+      pw->setGlobalTestCard(m_globalTestCard);
+
+    if(m_syncPositions)
+    {
+      if(m.fullscreen)
+      {
+        pw->showFullScreen();
+      }
+      else
+      {
+        if(pw->isFullScreen())
+          pw->showNormal();
+
+        pw->move(m.windowPosition);
+        pw->resize(m.windowSize);
+      }
+
+      // Set screen via underlying QWindow (must be done after show)
+      if(m.screenIndex >= 0 && m.screenIndex < screens.size())
+      {
+        if(auto* wh = pw->windowHandle())
+          wh->setScreen(screens[m.screenIndex]);
+      }
+    }
+
+    pw->show();
+    pw->raise();
+  }
+}
+
+void OutputPreviewWindows::setSyncPositions(bool sync)
+{
+  m_syncPositions = sync;
+}
+
+void OutputPreviewWindows::setPreviewContent(PreviewContent mode)
+{
+  m_content = mode;
+  for(auto* pw : m_windows)
+    pw->setPreviewContent(mode);
+}
+
+void OutputPreviewWindows::setInputResolution(QSize sz)
+{
+  if(m_inputResolution != sz)
+  {
+    m_inputResolution = sz;
+    rebuildGlobalTestCard();
+  }
+}
+
+void OutputPreviewWindows::rebuildGlobalTestCard()
+{
+  m_globalTestCard = renderTestCard(m_inputResolution.width(), m_inputResolution.height());
+  for(auto* pw : m_windows)
+    pw->setGlobalTestCard(m_globalTestCard);
 }
 
 // --- WindowSettingsWidget implementation ---
@@ -2228,12 +2628,60 @@ WindowSettingsWidget::WindowSettingsWidget(QWidget* parent)
     btnLayout->addWidget(removeBtn);
     multiLayout->addLayout(btnLayout);
 
+    // Preview content combo
+    m_previewContentCombo = new QComboBox;
+    m_previewContentCombo->addItem(tr("Black"));
+    m_previewContentCombo->addItem(tr("Per-Output Test Card"));
+    m_previewContentCombo->addItem(tr("Global Test Card"));
+    m_previewContentCombo->addItem(tr("Output ID"));
+    btnLayout->addWidget(new QLabel(tr("Preview:")));
+    btnLayout->addWidget(m_previewContentCombo);
+
+    m_syncPositionsCheck = new QCheckBox(tr("Sync Positions"));
+    m_syncPositionsCheck->setChecked(true);
+    m_syncPositionsCheck->setToolTip(tr("Synchronize preview window positions and sizes with the output mappings"));
+    btnLayout->addWidget(m_syncPositionsCheck);
+
+    connect(m_previewContentCombo, qOverload<int>(&QComboBox::currentIndexChanged),
+        this, [this](int idx) {
+      if(m_preview)
+        m_preview->setPreviewContent(static_cast<PreviewContent>(idx));
+    });
+
+    connect(m_syncPositionsCheck, &QCheckBox::toggled, this, [this](bool checked) {
+      if(m_preview)
+        m_preview->setSyncPositions(checked);
+    });
+
     connect(addBtn, &QPushButton::clicked, this, [this] {
       m_canvas->addOutput();
+
+      // Set initial window properties from source rect x input resolution
+      // (don't rely on deferred selectionChanged signal for auto-match)
+      int inW = m_inputWidth->value();
+      int inH = m_inputHeight->value();
+      OutputMappingItem* newest = nullptr;
+      for(auto* item : m_canvas->scene()->items())
+        if(auto* mi = dynamic_cast<OutputMappingItem*>(item))
+          if(!newest || mi->outputIndex() > newest->outputIndex())
+            newest = mi;
+      if(newest)
+      {
+        auto r = newest->mapRectToScene(newest->rect());
+        double srcX = r.x() / m_canvas->canvasWidth();
+        double srcY = r.y() / m_canvas->canvasHeight();
+        double srcW = r.width() / m_canvas->canvasWidth();
+        double srcH = r.height() / m_canvas->canvasHeight();
+        newest->windowPosition = QPoint(int(srcX * inW), int(srcY * inH));
+        newest->windowSize = QSize(qMax(1, int(srcW * inW)), qMax(1, int(srcH * inH)));
+      }
+
+      syncPreview();
     });
     connect(removeBtn, &QPushButton::clicked, this, [this] {
       m_canvas->removeSelectedOutput();
       m_selectedOutput = -1;
+      syncPreview();
     });
 
     // Properties for selected output
@@ -2334,7 +2782,12 @@ WindowSettingsWidget::WindowSettingsWidget(QWidget* parent)
     propLayout->addRow(blendGroup);
 
     propGroup->setEnabled(false);
-    multiLayout->addWidget(propGroup);
+
+    auto* scrollArea = new QScrollArea;
+    scrollArea->setWidget(propGroup);
+    scrollArea->setWidgetResizable(true);
+    scrollArea->setFrameShape(QFrame::NoFrame);
+    multiLayout->addWidget(scrollArea, 1);
 
     m_canvas->onSelectionChanged = [this, propGroup](int idx) {
       m_selectedOutput = idx;
@@ -2346,6 +2799,7 @@ WindowSettingsWidget::WindowSettingsWidget(QWidget* parent)
     m_canvas->onItemGeometryChanged = [this](int idx) {
       if(idx == m_selectedOutput)
         updatePropertiesFromSelection();
+      syncPreview();
     };
 
     // Wire window property changes back to the selected canvas item
@@ -2382,9 +2836,12 @@ WindowSettingsWidget::WindowSettingsWidget(QWidget* parent)
     connect(m_inputHeight, qOverload<int>(&QSpinBox::valueChanged), this, updatePx);
     connect(m_screenCombo, qOverload<int>(&QComboBox::currentIndexChanged), this, updatePx);
 
-    // Update canvas aspect ratio when input resolution changes
+    // Update canvas aspect ratio and preview test card when input resolution changes
     auto updateAR = [this] {
       m_canvas->updateAspectRatio(m_inputWidth->value(), m_inputHeight->value());
+      if(m_preview)
+        m_preview->setInputResolution(
+            QSize(m_inputWidth->value(), m_inputHeight->value()));
     };
     connect(m_inputWidth, qOverload<int>(&QSpinBox::valueChanged), this, updateAR);
     connect(m_inputHeight, qOverload<int>(&QSpinBox::valueChanged), this, updateAR);
@@ -2408,6 +2865,29 @@ WindowSettingsWidget::WindowSettingsWidget(QWidget* parent)
 void WindowSettingsWidget::onModeChanged(int index)
 {
   m_stack->setCurrentIndex(index);
+
+  if(index != (int)WindowMode::MultiWindow)
+  {
+    // Destroy preview when leaving multi-window mode
+    delete m_preview;
+    m_preview = nullptr;
+  }
+  else
+  {
+    // Entering multi-window mode: always create preview
+    if(!m_preview)
+    {
+      m_preview = new OutputPreviewWindows(this);
+      if(m_previewContentCombo)
+        m_preview->setPreviewContent(
+            static_cast<PreviewContent>(m_previewContentCombo->currentIndex()));
+      if(m_syncPositionsCheck)
+        m_preview->setSyncPositions(m_syncPositionsCheck->isChecked());
+      m_preview->setInputResolution(
+          QSize(m_inputWidth->value(), m_inputHeight->value()));
+      syncPreview();
+    }
+  }
 }
 
 void WindowSettingsWidget::updatePropertiesFromSelection()
@@ -2496,6 +2976,7 @@ void WindowSettingsWidget::applyPropertiesToSelection()
         mi->blendTop = {(float)m_blendTopW->value(), (float)m_blendTopG->value()};
         mi->blendBottom = {(float)m_blendBottomW->value(), (float)m_blendBottomG->value()};
         mi->update(); // Repaint to show blend zones
+        syncPreview();
         return;
       }
     }
@@ -2524,6 +3005,7 @@ void WindowSettingsWidget::applySourceRectToSelection()
         mi->setPos(0, 0);
         mi->setRect(newSceneRect);
         mi->onChanged = std::move(savedCallback);
+        syncPreview();
         return;
       }
     }
@@ -2566,6 +3048,12 @@ void WindowSettingsWidget::updatePixelLabels()
   }
 }
 
+void WindowSettingsWidget::syncPreview()
+{
+  if(m_preview && m_canvas)
+    m_preview->syncToMappings(m_canvas->getMappings());
+}
+
 Device::DeviceSettings WindowSettingsWidget::getSettings() const
 {
   Device::DeviceSettings s;
@@ -2597,6 +3085,7 @@ void WindowSettingsWidget::setSettings(const Device::DeviceSettings& settings)
     if(set.mode == WindowMode::MultiWindow && m_canvas)
     {
       m_canvas->setMappings(set.outputs);
+      syncPreview();
     }
   }
 }
