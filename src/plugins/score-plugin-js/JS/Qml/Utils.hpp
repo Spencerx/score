@@ -39,6 +39,10 @@ public:
 
   QObject* settings(QString uid);
   W_INVOKABLE(settings);
+
+  // In seconds
+  double timestamp() const noexcept;
+  W_INVOKABLE(timestamp)
 };
 
 class JsSystem : public QObject

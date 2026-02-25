@@ -237,6 +237,13 @@ bool JsUtils::isInfinite(TimeVal v)
   return v.infinite();
 }
 
+double JsUtils::timestamp() const noexcept
+{
+  using namespace std::chrono;
+  const auto now = steady_clock::now().time_since_epoch();
+  return duration_cast<nanoseconds>(now).count() / 1e9;
+}
+
 bool JsSystem::isDeviceMDMEnrolled()
 {
   return score::detectSystemEnrolment();
