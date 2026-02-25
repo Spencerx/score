@@ -237,6 +237,11 @@ bool JsUtils::isInfinite(TimeVal v)
   return v.infinite();
 }
 
+TimeVal JsUtils::timevalFromMilliseconds(double ms)
+{
+  return TimeVal::fromMsecs(ms);
+}
+
 double JsUtils::timestamp() const noexcept
 {
   using namespace std::chrono;

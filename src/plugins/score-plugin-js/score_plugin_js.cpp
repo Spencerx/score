@@ -47,9 +47,21 @@ score_plugin_js::score_plugin_js()
 #endif
 
   ossia::qt::registerQVariantConverters();
-  QMetaType::registerConverter<TimeVal, int64_t>([](const TimeVal& qval) -> int64_t {
-    return qval.impl;
+  QMetaType::registerConverter<int64_t, TimeVal>(
+      [](int64_t qval) -> TimeVal { return TimeVal{qval}; });
+  QMetaType::registerConverter<double, TimeVal>(
+      [](double qval) -> TimeVal { return TimeVal{(int64_t)qval}; });
+  QMetaType::registerConverter<QTime, TimeVal>([](const QTime& qval) -> TimeVal {
+    int64_t ms = 0;
+    ms += qval.hour() * 60 * 60 * 1000;
+    ms += qval.minute() * 60 * 1000;
+    ms += qval.second() * 1000;
+    ms += qval.msec();
+    return TimeVal::fromMsecs(ms);
   });
+
+  QMetaType::registerConverter<TimeVal, int64_t>(
+      [](const TimeVal& qval) -> int64_t { return qval.impl; });
 
   QMetaType::registerConverter<TimeVal, QTime>([](const TimeVal& qval) -> QTime {
     return qval.toQTime();

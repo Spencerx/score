@@ -37,6 +37,9 @@ public:
   bool isInfinite(TimeVal v);
   W_SLOT(isInfinite)
 
+  TimeVal timevalFromMilliseconds(double ms);
+  W_SLOT(timevalFromMilliseconds)
+
   QObject* settings(QString uid);
   W_INVOKABLE(settings);
 

@@ -545,4 +545,71 @@ void EditJsContext::replaceAddress(QObjectList objects, QString before, QString 
   m->findAndReplace(objs, *addr_before, *addr_after);
 }
 
+void EditJsContext::setIntervalDuration(QObject* object, TimeVal flicks)
+{
+  auto doc = ctx();
+  if(!doc)
+    return;
+
+  auto i = qobject_cast<Scenario::IntervalModel*>(object);
+  if(!i)
+    return;
+
+  auto [m, _] = macro(*doc);
+  m->resizeInterval(*i, flicks);
+}
+void EditJsContext::setIntervalMinDuration(QObject* object, TimeVal flicks)
+{
+  auto doc = ctx();
+  if(!doc)
+    return;
+
+  auto i = qobject_cast<Scenario::IntervalModel*>(object);
+  if(!i)
+    return;
+
+  auto [m, _] = macro(*doc);
+  m->setIntervalMin(*i, flicks, flicks.impl >= 0);
+}
+
+void EditJsContext::setIntervalMaxDuration(QObject* object, TimeVal flicks)
+{
+  auto doc = ctx();
+  if(!doc)
+    return;
+
+  auto i = qobject_cast<Scenario::IntervalModel*>(object);
+  if(!i)
+    return;
+
+  auto [m, _] = macro(*doc);
+  m->setIntervalMax(*i, flicks, false);
+}
+
+void EditJsContext::setIntervalMaxInfinite(QObject* object, bool b)
+{
+  auto doc = ctx();
+  if(!doc)
+    return;
+
+  auto i = qobject_cast<Scenario::IntervalModel*>(object);
+  if(!i)
+    return;
+
+  auto [m, _] = macro(*doc);
+  m->setIntervalMax(*i, i->duration.maxDuration(), b);
+}
+
+void EditJsContext::setIntervalSpeed(QObject* object, double s)
+{
+  auto doc = ctx();
+  if(!doc)
+    return;
+
+  auto i = qobject_cast<Scenario::IntervalModel*>(object);
+  if(!i)
+    return;
+
+  i->duration.setSpeed(s);
+}
 }

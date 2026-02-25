@@ -1,4 +1,6 @@
 #pragma once
+#include <Process/TimeValue.hpp>
+
 #include <score/document/DocumentContext.hpp>
 
 #include <ossia-qt/js_utilities.hpp>
@@ -122,6 +124,17 @@ public:
 
   QObject* createIntervalBetween(QObject* startState, QObject* endState);
   W_SLOT(createIntervalBetween)
+
+  void setIntervalDuration(QObject* object, TimeVal flicks);
+  W_SLOT(setIntervalDuration)
+  void setIntervalMinDuration(QObject* object, TimeVal flicks);
+  W_SLOT(setIntervalMinDuration)
+  void setIntervalMaxDuration(QObject* object, TimeVal flicks);
+  W_SLOT(setIntervalMaxDuration)
+  void setIntervalMaxInfinite(QObject* object, bool);
+  W_SLOT(setIntervalMaxInfinite)
+  void setIntervalSpeed(QObject* object, double);
+  W_SLOT(setIntervalSpeed)
 
   QObject* port(QObject* obj, QString name);
   W_SLOT(port)
