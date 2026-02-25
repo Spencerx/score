@@ -1366,15 +1366,15 @@ public:
                 }
               }));
 
-      // Window position feedback
-      pw.connections.push_back(
-          QObject::connect(w, &QWindow::xChanged, [&pw, w](int x) {
-            pw.pos_param->set_value(ossia::vec2f{float(x), float(w->y())});
-          }));
-      pw.connections.push_back(
-          QObject::connect(w, &QWindow::yChanged, [&pw, w](int y) {
-            pw.pos_param->set_value(ossia::vec2f{float(w->x()), float(y)});
-          }));
+      // // Window position feedback
+      // pw.connections.push_back(
+      //     QObject::connect(w, &QWindow::xChanged, [&pw, w](int x) {
+      //       pw.pos_param->set_value(ossia::vec2f{float(x), float(w->y())});
+      //     }));
+      // pw.connections.push_back(
+      //     QObject::connect(w, &QWindow::yChanged, [&pw, w](int y) {
+      //       pw.pos_param->set_value(ossia::vec2f{float(w->x()), float(y)});
+      //     }));
 
       // Keyboard
       pw.connections.push_back(
