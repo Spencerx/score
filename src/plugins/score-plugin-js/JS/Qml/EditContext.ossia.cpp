@@ -90,8 +90,12 @@ void EditJsContext::reinitialize()
 
 void EditJsContext::scrub(double dx)
 {
-  // TODO
+  auto plug
+      = score::GUIAppContext().findGuiApplicationPlugin<Engine::ApplicationPlugin>();
+  if(plug)
+    plug->execution().request_transport_from_localtree(TimeVal::fromMsecs(dx));
 }
+
 QObject* EditJsContext::transport()
 {
   auto doc = ctx();

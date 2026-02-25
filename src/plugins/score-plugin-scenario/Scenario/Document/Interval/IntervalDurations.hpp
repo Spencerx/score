@@ -101,7 +101,9 @@ public:
       E_SIGNAL(SCORE_PLUGIN_SCENARIO_EXPORT, minDurationChanged, arg)
   void maxDurationChanged(const TimeVal& arg)
       E_SIGNAL(SCORE_PLUGIN_SCENARIO_EXPORT, maxDurationChanged, arg)
-  void playPercentageChanged(double arg)
+  void positionChanged(double arg) // Always fire
+      E_SIGNAL(SCORE_PLUGIN_SCENARIO_EXPORT, positionChanged, arg)
+  void playPercentageChanged(double arg) // Rate-limited
       E_SIGNAL(SCORE_PLUGIN_SCENARIO_EXPORT, playPercentageChanged, arg)
   void rigidityChanged(bool arg)
       E_SIGNAL(SCORE_PLUGIN_SCENARIO_EXPORT, rigidityChanged, arg)
