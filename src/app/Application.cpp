@@ -382,6 +382,10 @@ void Application::init()
   SetDllDirectoryW((wchar_t*)dir2.utf16());
 #endif
 
+  if(appSettings.ui.isEmpty())
+    if(!qEnvironmentVariableIsSet("QT_QUICK_CONTROLS_STYLE"))
+      qputenv("QT_QUICK_CONTROLS_STYLE", "Fusion");
+
   // MVP
   if(appSettings.gui)
   {
