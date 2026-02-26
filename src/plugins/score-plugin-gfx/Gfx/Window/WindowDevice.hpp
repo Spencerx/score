@@ -1,0 +1,461 @@
+#pragma once
+
+#include <Gfx/GfxParameter.hpp>
+#include <Gfx/Graph/ScreenNode.hpp>
+#include <Gfx/Graph/Window.hpp>
+#include <Gfx/Settings/Model.hpp>
+
+#include <core/application/ApplicationSettings.hpp>
+
+#include <ossia/network/base/device.hpp>
+#include <ossia/network/base/protocol.hpp>
+#include <ossia/network/generic/generic_node.hpp>
+
+#include <ossia-qt/invoke.hpp>
+namespace Gfx
+{
+
+static score::gfx::ScreenNode* createScreenNode()
+{
+  const auto& settings = score::AppContext().applicationSettings;
+  const auto& gfx_settings = score::AppContext().settings<Gfx::Settings::Model>();
+
+  auto make_configuration = [&] {
+    score::gfx::OutputNode::Configuration conf;
+    double rate = gfx_settings.getRate();
+    if(rate > 0)
+      conf = {.manualRenderingRate = 1000. / rate, .supportsVSync = true};
+    else
+      conf = {.manualRenderingRate = {}, .supportsVSync = true};
+    return conf;
+  };
+
+  auto node = new score::gfx::ScreenNode{
+      make_configuration(), false, (settings.autoplay || !settings.gui)};
+
+  QObject::connect(
+      &gfx_settings, &Gfx::Settings::Model::RateChanged, node,
+      [node, make_configuration] { node->setConfiguration(make_configuration()); });
+
+  return node;
+}
+class window_device : public ossia::net::device_base
+{
+  score::gfx::ScreenNode* m_screen{};
+  gfx_node_base m_root;
+  QObject m_qtContext;
+
+  ossia::net::parameter_base* scaled_win{};
+  ossia::net::parameter_base* abs_win{};
+  ossia::net::parameter_base* abs_tablet_win{};
+  ossia::net::parameter_base* size_param{};
+  ossia::net::parameter_base* rendersize_param{};
+
+  void update_viewport()
+  {
+    auto v = rendersize_param->value();
+    if(auto val = v.target<ossia::vec2f>())
+    {
+      auto dom = abs_win->get_domain();
+      if((*val)[0] >= 1.f && (*val)[1] >= 1.f)
+      {
+        ossia::set_max(dom, *val);
+        abs_win->set_domain(std::move(dom));
+        abs_tablet_win->set_domain(std::move(dom));
+      }
+      else
+      {
+        // Use the normal size
+        v = size_param->value();
+        if(auto val = v.target<ossia::vec2f>())
+        {
+          auto dom = abs_win->get_domain();
+          if((*val)[0] >= 1.f && (*val)[1] >= 1.f)
+          {
+            ossia::set_max(dom, *val);
+            abs_win->set_domain(std::move(dom));
+            abs_tablet_win->set_domain(std::move(dom));
+          }
+        }
+      }
+    }
+    else
+    {
+      v = size_param->value();
+      if(auto val = v.target<ossia::vec2f>())
+      {
+        auto dom = abs_win->get_domain();
+        if((*val)[0] >= 1.f && (*val)[1] >= 1.f)
+        {
+          ossia::set_max(dom, *val);
+          abs_win->set_domain(std::move(dom));
+          abs_tablet_win->set_domain(std::move(dom));
+        }
+      }
+    }
+  }
+
+public:
+  ~window_device()
+  {
+    if(auto w = m_screen->window())
+      w->close();
+
+    m_screen->onWindowMove = [](QPointF) { };
+    m_screen->onMouseMove = [](QPointF, QPointF) { };
+    m_screen->onTabletMove = [](QTabletEvent*) { };
+    m_screen->onKey = [](int, const QString&) { };
+    m_screen->onKeyRelease = [](int, const QString&) { };
+    m_screen->onFps = [](float) { };
+    m_protocol->stop();
+
+    m_root.clear_children();
+
+    m_protocol.reset();
+  }
+
+  window_device(std::unique_ptr<gfx_protocol_base> proto, std::string name)
+      : ossia::net::device_base{std::move(proto)}
+      , m_screen{createScreenNode()}
+      , m_root{*this, *static_cast<gfx_protocol_base*>(m_protocol.get()), m_screen, name}
+  {
+    this->m_capabilities.change_tree = true;
+    m_screen->setTitle(QString::fromStdString(name));
+
+    {
+      auto screen_node
+          = std::make_unique<ossia::net::generic_node>("screen", *this, m_root);
+      auto screen_param = screen_node->create_parameter(ossia::val_type::STRING);
+      screen_param->set_domain(ossia::make_domain(int(0), int(100)));
+      screen_param->add_callback([this](const ossia::value& v) {
+        if(auto val = v.target<int>())
+        {
+          ossia::qt::run_async(&m_qtContext, [screen = this->m_screen, scr = *val] {
+            const auto& cur_screens = qApp->screens();
+            if(ossia::valid_index(scr, cur_screens))
+            {
+              screen->setScreen(cur_screens[scr]);
+            }
+          });
+        }
+        else if(auto val = v.target<std::string>())
+        {
+          ossia::qt::run_async(&m_qtContext, [screen = this->m_screen, scr = *val] {
+            const auto& cur_screens = qApp->screens();
+            for(auto s : cur_screens)
+            {
+              if(s->name() == scr.c_str())
+              {
+                screen->setScreen(s);
+                break;
+              }
+            }
+          });
+        }
+      });
+      m_root.add_child(std::move(screen_node));
+    }
+
+    {
+      struct move_window_lock
+      {
+        bool locked{};
+      };
+      auto lock = std::make_shared<move_window_lock>();
+
+      auto pos_node
+          = std::make_unique<ossia::net::generic_node>("position", *this, m_root);
+      auto pos_param = pos_node->create_parameter(ossia::val_type::VEC2F);
+      pos_param->push_value(
+          ossia::vec2f{100.f, 100.f}); // FIXME Try to detect center of screen ?
+      pos_param->add_callback([this, lock](const ossia::value& v) {
+        if(lock->locked)
+          return;
+        if(auto val = v.target<ossia::vec2f>())
+        {
+          ossia::qt::run_async(&m_qtContext, [screen = this->m_screen, v = *val, lock] {
+            screen->setPosition({(int)v[0], (int)v[1]});
+          });
+        }
+      });
+
+      m_screen->onWindowMove = [this, pos_param, lock](QPointF pos) {
+        if(lock->locked)
+          return;
+        if(const auto& w = m_screen->window())
+        {
+          lock->locked = true;
+          pos_param->set_value(ossia::vec2f{float(pos.x()), float(pos.y())});
+          lock->locked = false;
+        }
+      };
+      m_root.add_child(std::move(pos_node));
+    }
+
+    // Mouse input
+    {
+      auto node = std::make_unique<ossia::net::generic_node>("cursor", *this, m_root);
+      {
+        auto scale_node
+            = std::make_unique<ossia::net::generic_node>("scaled", *this, *node);
+        scaled_win = scale_node->create_parameter(ossia::val_type::VEC2F);
+        scaled_win->set_domain(ossia::make_domain(0.f, 1.f));
+        scaled_win->push_value(ossia::vec2f{0.f, 0.f});
+        node->add_child(std::move(scale_node));
+      }
+      {
+        auto abs_node
+            = std::make_unique<ossia::net::generic_node>("absolute", *this, *node);
+        abs_win = abs_node->create_parameter(ossia::val_type::VEC2F);
+        abs_win->set_domain(
+            ossia::make_domain(ossia::vec2f{0.f, 0.f}, ossia::vec2f{1280, 270.f}));
+        abs_win->push_value(ossia::vec2f{0.f, 0.f});
+        node->add_child(std::move(abs_node));
+      }
+      {
+        auto visible
+            = std::make_unique<ossia::net::generic_node>("visible", *this, *node);
+        auto param = visible->create_parameter(ossia::val_type::BOOL);
+        param->add_callback([this](const ossia::value& v) {
+          if(auto val = v.target<bool>())
+          {
+            ossia::qt::run_async(&m_qtContext, [screen = this->m_screen, v = *val] {
+              screen->setCursor(v);
+            });
+          }
+        });
+        node->add_child(std::move(visible));
+      }
+
+      m_screen->onMouseMove = [this](QPointF screen, QPointF win) {
+        if(const auto& w = m_screen->window())
+        {
+          auto sz = w->size();
+          scaled_win->push_value(
+              ossia::vec2f{float(win.x() / sz.width()), float(win.y() / sz.height())});
+          abs_win->push_value(ossia::vec2f{float(win.x()), float(win.y())});
+        }
+      };
+
+      m_root.add_child(std::move(node));
+    }
+
+    // Tablet input
+    ossia::net::parameter_base* scaled_tablet_win{};
+    {
+      auto node = std::make_unique<ossia::net::generic_node>("tablet", *this, m_root);
+      ossia::net::parameter_base* tablet_pressure{};
+      ossia::net::parameter_base* tablet_z{};
+      ossia::net::parameter_base* tablet_tan{};
+      ossia::net::parameter_base* tablet_rot{};
+      ossia::net::parameter_base* tablet_tilt_x{};
+      ossia::net::parameter_base* tablet_tilt_y{};
+      {
+        auto scale_node
+            = std::make_unique<ossia::net::generic_node>("scaled", *this, *node);
+        scaled_tablet_win = scale_node->create_parameter(ossia::val_type::VEC2F);
+        scaled_tablet_win->set_domain(ossia::make_domain(0.f, 1.f));
+        scaled_tablet_win->push_value(ossia::vec2f{0.f, 0.f});
+        node->add_child(std::move(scale_node));
+      }
+      {
+        auto abs_node
+            = std::make_unique<ossia::net::generic_node>("absolute", *this, *node);
+        abs_tablet_win = abs_node->create_parameter(ossia::val_type::VEC2F);
+        abs_tablet_win->set_domain(
+            ossia::make_domain(ossia::vec2f{0.f, 0.f}, ossia::vec2f{1280, 270.f}));
+        abs_tablet_win->push_value(ossia::vec2f{0.f, 0.f});
+        node->add_child(std::move(abs_node));
+      }
+      {
+        auto scale_node = std::make_unique<ossia::net::generic_node>("z", *this, *node);
+        tablet_z = scale_node->create_parameter(ossia::val_type::INT);
+        node->add_child(std::move(scale_node));
+      }
+      {
+        auto scale_node
+            = std::make_unique<ossia::net::generic_node>("pressure", *this, *node);
+        tablet_pressure = scale_node->create_parameter(ossia::val_type::FLOAT);
+        //tablet_pressure->set_domain(ossia::make_domain(0.f, 1.f));
+        //tablet_pressure->push_value(0.f);
+        node->add_child(std::move(scale_node));
+      }
+      {
+        auto scale_node
+            = std::make_unique<ossia::net::generic_node>("tangential", *this, *node);
+        tablet_tan = scale_node->create_parameter(ossia::val_type::FLOAT);
+        tablet_tan->set_domain(ossia::make_domain(-1.f, 1.f));
+        //tablet_tan->push_value(0.f);
+        node->add_child(std::move(scale_node));
+      }
+      {
+        auto scale_node
+            = std::make_unique<ossia::net::generic_node>("rotation", *this, *node);
+        tablet_rot = scale_node->create_parameter(ossia::val_type::FLOAT);
+        tablet_rot->set_unit(ossia::degree_u{});
+        tablet_rot->set_domain(ossia::make_domain(-180.f, 180.f));
+        node->add_child(std::move(scale_node));
+      }
+      {
+        auto scale_node
+            = std::make_unique<ossia::net::generic_node>("tilt_x", *this, *node);
+        tablet_tilt_x = scale_node->create_parameter(ossia::val_type::FLOAT);
+        tablet_tilt_x->set_domain(ossia::make_domain(-60.f, 60.f));
+        tablet_tilt_x->set_unit(ossia::degree_u{});
+        node->add_child(std::move(scale_node));
+      }
+      {
+        auto scale_node
+            = std::make_unique<ossia::net::generic_node>("tilt_y", *this, *node);
+        tablet_tilt_y = scale_node->create_parameter(ossia::val_type::FLOAT);
+        tablet_tilt_y->set_domain(ossia::make_domain(-60.f, 60.f));
+        tablet_tilt_y->set_unit(ossia::degree_u{});
+        node->add_child(std::move(scale_node));
+      }
+
+      m_screen->onTabletMove = [=, this](QTabletEvent* ev) {
+        if(const auto& w = m_screen->window())
+        {
+          const auto sz = w->size();
+          const auto win = ev->position();
+          scaled_tablet_win->push_value(
+              ossia::vec2f{float(win.x() / sz.width()), float(win.y() / sz.height())});
+          abs_tablet_win->push_value(ossia::vec2f{float(win.x()), float(win.y())});
+          tablet_pressure->push_value(ev->pressure());
+          tablet_tan->push_value(ev->tangentialPressure());
+          tablet_rot->push_value(ev->rotation());
+          tablet_z->push_value(ev->z());
+          tablet_tilt_x->push_value(ev->xTilt());
+          tablet_tilt_y->push_value(ev->yTilt());
+        }
+      };
+
+      m_root.add_child(std::move(node));
+    }
+
+    {
+      auto size_node = std::make_unique<ossia::net::generic_node>("size", *this, m_root);
+      size_param = size_node->create_parameter(ossia::val_type::VEC2F);
+      size_param->push_value(ossia::vec2f{1280.f, 720.f});
+      size_param->add_callback([this](const ossia::value& v) {
+        if(auto val = v.target<ossia::vec2f>())
+        {
+          ossia::qt::run_async(&m_qtContext, [screen = this->m_screen, v = *val] {
+            screen->setSize({(int)v[0], (int)v[1]});
+          });
+
+          update_viewport();
+        }
+      });
+
+      m_root.add_child(std::move(size_node));
+    }
+
+    {
+      auto size_node
+          = std::make_unique<ossia::net::generic_node>("rendersize", *this, m_root);
+      ossia::net::set_description(
+          *size_node, "Set to [0, 0] to use the viewport's size");
+
+      rendersize_param = size_node->create_parameter(ossia::val_type::VEC2F);
+      rendersize_param->push_value(ossia::vec2f{0.f, 0.f});
+      rendersize_param->add_callback([this](const ossia::value& v) {
+        if(auto val = v.target<ossia::vec2f>())
+        {
+          ossia::qt::run_async(&m_qtContext, [screen = this->m_screen, v = *val] {
+            screen->setRenderSize({(int)v[0], (int)v[1]});
+          });
+
+          update_viewport();
+        }
+      });
+
+      m_root.add_child(std::move(size_node));
+    }
+
+    // Keyboard input
+    {
+      auto node = std::make_unique<ossia::net::generic_node>("key", *this, m_root);
+      {
+        auto press_node
+            = std::make_unique<ossia::net::generic_node>("press", *this, *node);
+        ossia::net::parameter_base* press_param{};
+        ossia::net::parameter_base* text_param{};
+        {
+          auto code_node
+              = std::make_unique<ossia::net::generic_node>("code", *this, *press_node);
+          press_param = code_node->create_parameter(ossia::val_type::INT);
+          press_param->push_value(ossia::vec2f{0.f, 0.f});
+          press_node->add_child(std::move(code_node));
+        }
+        {
+          auto text_node
+              = std::make_unique<ossia::net::generic_node>("text", *this, *press_node);
+          text_param = text_node->create_parameter(ossia::val_type::STRING);
+          press_node->add_child(std::move(text_node));
+        }
+
+        m_screen->onKey = [press_param, text_param](int key, const QString& text) {
+          press_param->push_value(key);
+          text_param->push_value(text.toStdString());
+        };
+        node->add_child(std::move(press_node));
+      }
+      {
+        auto release_node
+            = std::make_unique<ossia::net::generic_node>("release", *this, *node);
+        ossia::net::parameter_base* press_param{};
+        ossia::net::parameter_base* text_param{};
+        {
+          auto code_node
+              = std::make_unique<ossia::net::generic_node>("code", *this, *release_node);
+          press_param = code_node->create_parameter(ossia::val_type::INT);
+          press_param->push_value(ossia::vec2f{0.f, 0.f});
+          release_node->add_child(std::move(code_node));
+        }
+        {
+          auto text_node
+              = std::make_unique<ossia::net::generic_node>("text", *this, *release_node);
+          text_param = text_node->create_parameter(ossia::val_type::STRING);
+          release_node->add_child(std::move(text_node));
+        }
+
+        m_screen->onKeyRelease
+            = [press_param, text_param](int key, const QString& text) {
+          press_param->push_value(key);
+          text_param->push_value(text.toStdString());
+        };
+        node->add_child(std::move(release_node));
+      }
+
+      m_root.add_child(std::move(node));
+    }
+
+    {
+      auto fs_node
+          = std::make_unique<ossia::net::generic_node>("fullscreen", *this, m_root);
+      auto fs_param = fs_node->create_parameter(ossia::val_type::BOOL);
+      fs_param->add_callback([this](const ossia::value& v) {
+        if(auto val = v.target<bool>())
+        {
+          ossia::qt::run_async(&m_qtContext, [screen = this->m_screen, v = *val] {
+            screen->setFullScreen(v);
+          });
+        }
+      });
+      m_root.add_child(std::move(fs_node));
+    }
+
+    {
+      auto fps_node = std::make_unique<ossia::net::generic_node>("fps", *this, m_root);
+      auto fps_param = fps_node->create_parameter(ossia::val_type::FLOAT);
+      m_screen->onFps = [fps_param](float fps) { fps_param->push_value(fps); };
+      m_root.add_child(std::move(fps_node));
+    }
+  }
+
+  const gfx_node_base& get_root_node() const override { return m_root; }
+  gfx_node_base& get_root_node() override { return m_root; }
+};
+
+}

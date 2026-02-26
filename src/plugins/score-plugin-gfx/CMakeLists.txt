@@ -169,6 +169,14 @@ set(HDRS
     Gfx/Settings/Presenter.hpp
     Gfx/Settings/View.hpp
     Gfx/Settings/Factory.hpp
+    
+    Gfx/Window/BackgroundDevice.hpp
+    Gfx/Window/MultiWindowDevice.hpp
+    Gfx/Window/OutputMapping.hpp
+    Gfx/Window/OutputPreview.hpp
+    Gfx/Window/TestCard.hpp
+    Gfx/Window/WindowDevice.hpp
+    Gfx/Window/WindowSettingsWidget.hpp
 
     Gfx/GfxApplicationPlugin.hpp
     Gfx/GfxContext.hpp
@@ -280,10 +288,17 @@ set(SRCS
     Gfx/WindowDevice.cpp
     Gfx/GfxInputDevice.cpp
 
-
     Gfx/Settings/Model.cpp
     Gfx/Settings/Presenter.cpp
     Gfx/Settings/View.cpp
+    
+    Gfx/Window/BackgroundDevice.cpp
+    Gfx/Window/MultiWindowDevice.cpp
+    Gfx/Window/OutputMapping.cpp
+    Gfx/Window/OutputPreview.cpp
+    Gfx/Window/TestCard.cpp
+    Gfx/Window/WindowDevice.cpp
+    Gfx/Window/WindowSettingsWidget.cpp
 
     score_plugin_gfx.cpp
 
