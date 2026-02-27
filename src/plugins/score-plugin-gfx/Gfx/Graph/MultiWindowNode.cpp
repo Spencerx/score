@@ -220,7 +220,9 @@ public:
 #endif
           fragColor = texture(tex, uv);
 
-          // Soft-edge blending (applied in warped texture space)
+          // Soft-edge blending
+          // v_texcoord.y is Y-up on both GL and Vulkan (Qt RHI normalizes this),
+          // so tc.y=0 is screen bottom and tc.y=1 is screen top.
           float alpha = 1.0;
           // Left edge
           if(blendWidths.x > 0.0 && tc.x < blendWidths.x)
@@ -228,12 +230,12 @@ public:
           // Right edge
           if(blendWidths.y > 0.0 && tc.x > 1.0 - blendWidths.y)
               alpha *= pow((1.0 - tc.x) / blendWidths.y, blendGammas.y);
-          // Top edge
-          if(blendWidths.z > 0.0 && tc.y < blendWidths.z)
-              alpha *= pow(tc.y / blendWidths.z, blendGammas.z);
-          // Bottom edge
-          if(blendWidths.w > 0.0 && tc.y > 1.0 - blendWidths.w)
-              alpha *= pow((1.0 - tc.y) / blendWidths.w, blendGammas.w);
+          // Top edge (tc.y near 1.0 = screen top)
+          if(blendWidths.z > 0.0 && tc.y > 1.0 - blendWidths.z)
+              alpha *= pow((1.0 - tc.y) / blendWidths.z, blendGammas.z);
+          // Bottom edge (tc.y near 0.0 = screen bottom)
+          if(blendWidths.w > 0.0 && tc.y < blendWidths.w)
+              alpha *= pow(tc.y / blendWidths.w, blendGammas.w);
 
           fragColor = vec4(fragColor.rgb * alpha, alpha);
       }
@@ -726,29 +728,33 @@ void MultiWindowNode::createOutput(score::gfx::OutputConfiguration conf)
     wo.window->setTitle(
         QString("Output %1").arg(i));
 
+    // Determine target screen
+    QScreen* targetScreen = nullptr;
+    if(mapping.screenIndex >= 0)
+    {
+      const auto& screens = qApp->screens();
+      if(mapping.screenIndex < screens.size())
+        targetScreen = screens[mapping.screenIndex];
+    }
+
     if(mapping.fullscreen)
     {
-      // Set screen if specified
-      if(mapping.screenIndex >= 0)
+      // On Windows, showFullScreen() can default to the primary monitor
+      // unless the window is already positioned within the target screen.
+      // Set geometry to the target screen's bounds first to anchor it.
+      if(targetScreen)
       {
-        const auto& screens = qApp->screens();
-        if(mapping.screenIndex < screens.size())
-          wo.window->setScreen(screens[mapping.screenIndex]);
+        wo.window->setScreen(targetScreen);
+        wo.window->setGeometry(targetScreen->geometry());
       }
       wo.window->showFullScreen();
     }
     else
     {
-      wo.window->resize(mapping.windowSize);
-      wo.window->setPosition(mapping.windowPosition);
-
-      if(mapping.screenIndex >= 0)
-      {
-        const auto& screens = qApp->screens();
-        if(mapping.screenIndex < screens.size())
-          wo.window->setScreen(screens[mapping.screenIndex]);
-      }
-
+      if(targetScreen)
+        wo.window->setScreen(targetScreen);
+      wo.window->setGeometry(
+          QRect(mapping.windowPosition, mapping.windowSize));
       wo.window->show();
     }
   }
