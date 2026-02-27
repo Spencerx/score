@@ -85,16 +85,17 @@ void PreviewWidget::mouseDoubleClickEvent(QMouseEvent*)
     onFullscreenToggled(m_index, isFullScreen());
 }
 
-// Build gradient stops approximating pow(1-t, gamma) opacity curve
+// Build gradient stops matching the shader formula: content * pow(t, gamma).
+// The overlay opacity is 1 - pow(t, gamma), so at the edge (t=0) it's fully
+// black and at the interior boundary (t=1) it's fully transparent.
 static void setGammaGradientStops(QLinearGradient& grad, float gamma)
 {
   constexpr int steps = 16;
-  constexpr int maxAlpha = 180;
   for(int i = 0; i <= steps; i++)
   {
-    double t = (double)i / steps;            // 0 = edge, 1 = interior
-    double alpha = std::pow(1.0 - t, gamma); // 1 at edge, 0 at interior
-    grad.setColorAt(t, QColor(0, 0, 0, (int)(alpha * maxAlpha)));
+    double t = (double)i / steps;                    // 0 = edge, 1 = interior
+    double overlay = 1.0 - std::pow(t, (double)gamma); // 1 at edge, 0 at interior
+    grad.setColorAt(t, QColor(0, 0, 0, (int)(overlay * 255)));
   }
 }
 
