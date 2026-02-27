@@ -493,11 +493,17 @@ void main ()
     }
     m_inputSamplers.clear();
 
-    delete m_window;
-    m_window = nullptr;
+    if(m_window)
+    {
+      m_window->deleteLater();
+      m_window = nullptr;
+    }
 
-    delete m_renderControl;
-    m_renderControl = nullptr;
+    if(m_renderControl)
+    {
+      m_renderControl->deleteLater();
+      m_renderControl = nullptr;
+    }
 
     m_internalTex.release();
 
@@ -651,10 +657,12 @@ GpuNode::Engine::~Engine()
 
 void GpuNode::Engine::releaseItem()
 {
+  qDebug(Q_FUNC_INFO);
   if(m_item)
   {
     m_item->setParent(nullptr);
     m_item->setParentItem(nullptr);
+    m_item->deleteLater();
     m_item = nullptr;
   }
 }
