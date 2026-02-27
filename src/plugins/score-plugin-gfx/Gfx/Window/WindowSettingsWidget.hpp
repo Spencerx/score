@@ -7,7 +7,6 @@
 #include <QFormLayout>
 #include <QGraphicsEllipseItem>
 #include <QGraphicsSceneMouseEvent>
-#include <QGroupBox>
 #include <QGuiApplication>
 #include <QHBoxLayout>
 #include <QLabel>
@@ -20,13 +19,14 @@
 #include <QScrollArea>
 #include <QSpinBox>
 #include <QStackedWidget>
+#include <QTabWidget>
 #include <QUrl>
 #include <QVBoxLayout>
 #include <qcheckbox.h>
 
 namespace Gfx
 {
-class CornerWarpCanvas;
+class DesktopLayoutCanvas;
 class OutputMappingCanvas;
 class OutputPreviewWindows;
 
@@ -53,7 +53,6 @@ private:
   QStackedWidget* m_stack{};
 
   // Multi-window UI
-  CornerWarpCanvas* m_warpCanvas{};
   OutputMappingCanvas* m_canvas{};
   QSpinBox* m_winPosX{};
   QSpinBox* m_winPosY{};
@@ -80,13 +79,29 @@ private:
   QDoubleSpinBox* m_blendBottomW{};
   QDoubleSpinBox* m_blendBottomG{};
 
+  QComboBox* m_lockModeCombo{};
+
   int m_selectedOutput{-1};
+  bool m_syncing{false}; // guard against selection sync loops
+
+  // Two-column layout: tabs on left, inspector on right
+  QTabWidget* m_tabWidget{};
+  DesktopLayoutCanvas* m_desktopCanvas{};
+  QWidget* m_inspectorPanel{};
+
+  // Per-output sections (hidden when no selection)
+  QWidget* m_outputSectionsContainer{};
+
+  // Output selector button row
+  QHBoxLayout* m_outputButtonsLayout{};
+  void rebuildOutputButtons();
+  void selectOutput(int index);
 
   // Preview windows
   OutputPreviewWindows* m_preview{};
   QComboBox* m_previewContentCombo{};
-  QCheckBox* m_syncPositionsCheck{};
-  void syncPreview();
+  void syncPreview(bool syncPositions = false);
+  void syncDesktopCanvasFromMappingItem(int index);
 };
 
 }

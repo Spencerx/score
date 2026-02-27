@@ -1,4 +1,4 @@
-#pragma once #pragma once
+#pragma once
 #include <Gfx/Window/WindowSettings.hpp>
 
 #include <QGraphicsRectItem>
@@ -8,12 +8,15 @@
 namespace Gfx
 {
 
+class OutputMappingCanvas;
+
 // Graphics item for draggable/resizable output mapping quads
 class OutputMappingItem final : public QGraphicsRectItem
 {
 public:
   explicit OutputMappingItem(
-      int index, const QRectF& rect, QGraphicsItem* parent = nullptr);
+      int index, const QRectF& rect, OutputMappingCanvas* canvas,
+      QGraphicsItem* parent = nullptr);
 
   int outputIndex() const noexcept { return m_index; }
   void setOutputIndex(int idx);
@@ -32,6 +35,10 @@ public:
 
   // 4-corner perspective warp
   CornerWarp cornerWarp;
+
+  OutputLockMode lockMode{OutputLockMode::Free};
+
+  void applyLockedState();
 
   // Called when item is moved or resized in the canvas
   std::function<void()> onChanged;
@@ -74,43 +81,9 @@ private:
   QRectF m_rectStart{};
   QPointF m_moveAnchorScene{}; // scene pos at press for precision move
   QPointF m_posAtPress{};      // item pos() at press
+  OutputMappingCanvas* m_canvas{};
 };
-class CornerWarpCanvas final : public QGraphicsView
-{
-public:
-  explicit CornerWarpCanvas(QWidget* parent = nullptr);
 
-  void setWarp(const CornerWarp& warp);
-  CornerWarp getWarp() const;
-  void resetWarp();
-
-  void setEnabled(bool enabled);
-
-  std::function<void()> onChanged;
-
-protected:
-  void resizeEvent(QResizeEvent* event) override;
-  void mousePressEvent(QMouseEvent* event) override;
-  void mouseMoveEvent(QMouseEvent* event) override;
-  void mouseReleaseEvent(QMouseEvent* event) override;
-
-private:
-  void rebuildItems();
-  void updateLinesAndGrid();
-
-  QGraphicsScene m_scene;
-  QGraphicsRectItem* m_border{};
-  QGraphicsEllipseItem* m_handles[4]{}; // TL, TR, BL, BR
-  QGraphicsPolygonItem* m_quadOutline{};
-  std::vector<QGraphicsLineItem*> m_gridLines;
-
-  CornerWarp m_warp;
-  double m_canvasSize{200.0};
-  bool m_dragging{false};
-  int m_dragHandle{-1};
-  QPointF m_handleAnchor{}; // scene pos of handle at press
-  QPointF m_mouseAnchor{};  // mouse scene pos at press
-};
 class OutputMappingCanvas final : public QGraphicsView
 {
 public:
@@ -128,19 +101,47 @@ public:
   double canvasWidth() const noexcept { return m_canvasWidth; }
   double canvasHeight() const noexcept { return m_canvasHeight; }
 
-  // Signal-like: call this when selection changes
+  bool snapEnabled() const noexcept { return m_snapEnabled; }
+  void setSnapEnabled(bool enabled);
+  QPointF snapPosition(const OutputMappingItem* item, QPointF proposedPos) const;
+
+  // Warp mode: double-click an item to enter/exit
+  void enterWarpMode(int outputIndex);
+  void exitWarpMode();
+  bool inWarpMode() const noexcept { return m_warpItemIndex >= 0; }
+  void resetWarp();
+
   std::function<void(int)> onSelectionChanged;
-  // Called when a mapping item's geometry changes (move/resize)
   std::function<void(int)> onItemGeometryChanged;
+  std::function<void()> onWarpChanged;
 
 protected:
   void resizeEvent(QResizeEvent* event) override;
+  void mouseDoubleClickEvent(QMouseEvent* event) override;
+  void mousePressEvent(QMouseEvent* event) override;
+  void mouseMoveEvent(QMouseEvent* event) override;
+  void mouseReleaseEvent(QMouseEvent* event) override;
+  void keyPressEvent(QKeyEvent* event) override;
 
 private:
   void setupItemCallbacks(OutputMappingItem* item);
+  void updateWarpVisuals();
+  OutputMappingItem* findItemByIndex(int index) const;
+
   QGraphicsScene m_scene;
   QGraphicsRectItem* m_border{};
   double m_canvasWidth{400.0};
   double m_canvasHeight{300.0};
+  bool m_snapEnabled{true};
+
+  // Warp mode state
+  int m_warpItemIndex{-1};
+  QGraphicsEllipseItem* m_warpHandles[4]{};
+  QGraphicsPolygonItem* m_warpQuad{};
+  std::vector<QGraphicsLineItem*> m_warpGrid;
+  bool m_warpDragging{false};
+  int m_warpDragHandle{-1};
+  QPointF m_warpHandleAnchor{};
+  QPointF m_warpMouseAnchor{};
 };
 }

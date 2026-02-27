@@ -4,9 +4,15 @@
 
 #include <Explorer/DocumentPlugin/DeviceDocumentPlugin.hpp>
 
+#include <Gfx/Window/CollapsibleSection.hpp>
+#include <Gfx/Window/DesktopLayout.hpp>
 #include <Gfx/Window/OutputMapping.hpp>
 #include <Gfx/Window/OutputPreview.hpp>
 #include <Gfx/WindowDevice.hpp>
+
+#include <QSplitter>
+W_OBJECT_IMPL(Gfx::FlatHeaderButton)
+W_OBJECT_IMPL(Gfx::CollapsibleSection)
 namespace Gfx
 {
 
@@ -33,270 +39,460 @@ WindowSettingsWidget::WindowSettingsWidget(QWidget* parent)
   // Page 1: Background (empty)
   m_stack->addWidget(new QWidget);
 
-  // Page 2: Multi-window
+  // Page 2: Multi-window (two tabs: Input Mapping + Desktop Layout)
   {
     auto* multiWidget = new QWidget;
     auto* multiLayout = new QVBoxLayout(multiWidget);
 
-    // Input texture resolution (for pixel label display)
+    // === Two-column layout: tabs on left, accordion inspector on right ===
+    auto* splitter = new QSplitter(Qt::Horizontal);
+
+    // --- Left side: Tab Widget with canvases ---
+    m_tabWidget = new QTabWidget;
+
+    // Tab 0: Input Mapping (canvas only)
+    m_canvas = new OutputMappingCanvas;
+    m_tabWidget->addTab(m_canvas, tr("Input Mapping"));
+
+    // Tab 1: Desktop Layout
+    m_desktopCanvas = new DesktopLayoutCanvas;
+    m_tabWidget->addTab(m_desktopCanvas, tr("Desktop Layout"));
+
+    splitter->addWidget(m_tabWidget);
+
+    // --- Right side: Accordion inspector in a scroll area ---
+    auto* scrollArea = new QScrollArea;
+    scrollArea->setWidgetResizable(true);
+    scrollArea->setFrameShape(QFrame::NoFrame);
+    scrollArea->setMinimumWidth(250);
+
+    m_inspectorPanel = new QWidget;
+    auto* inspectorLayout = new QVBoxLayout(m_inspectorPanel);
+    inspectorLayout->setContentsMargins(0, 0, 0, 0);
+    inspectorLayout->setSpacing(2);
+
+    // -- Section: Global Settings (always visible) --
     {
-      auto* resLayout = new QHBoxLayout;
-      resLayout->addWidget(new QLabel(tr("Input Resolution")));
+      auto* section = new CollapsibleSection(tr("Global Settings"));
+      auto* globalLayout = new QFormLayout;
+
       m_inputWidth = new QSpinBox;
       m_inputWidth->setRange(1, 16384);
       m_inputWidth->setValue(1920);
       m_inputHeight = new QSpinBox;
       m_inputHeight->setRange(1, 16384);
       m_inputHeight->setValue(1080);
+      auto* resLayout = new QHBoxLayout;
       resLayout->addWidget(m_inputWidth);
-      resLayout->addWidget(new QLabel(QStringLiteral("x")));
       resLayout->addWidget(m_inputHeight);
-      multiLayout->addLayout(resLayout);
+      globalLayout->addRow(tr("Resolution"), resLayout);
+
+      static int s_lastPreviewContent = 0;
+      m_previewContentCombo = new QComboBox;
+      m_previewContentCombo->addItem(tr("Black"));
+      m_previewContentCombo->addItem(tr("Per-Output Test Card"));
+      m_previewContentCombo->addItem(tr("Global Test Card"));
+      m_previewContentCombo->addItem(tr("Output ID"));
+      m_previewContentCombo->setCurrentIndex(s_lastPreviewContent);
+      globalLayout->addRow(tr("Preview"), m_previewContentCombo);
+
+      auto* snapCheck = new QCheckBox;
+      snapCheck->setChecked(true);
+      snapCheck->setToolTip(tr("Snap to borders in both canvases"));
+      globalLayout->addRow(tr("Snap"), snapCheck);
+
+      connect(snapCheck, &QCheckBox::toggled, this, [this](bool checked) {
+        m_desktopCanvas->setSnapEnabled(checked);
+        m_canvas->setSnapEnabled(checked);
+      });
+
+      auto* resetWarpBtn = new QPushButton(tr("Reset Warp"));
+      globalLayout->addRow(resetWarpBtn);
+      connect(resetWarpBtn, &QPushButton::clicked, this, [this] {
+        if(m_canvas)
+          m_canvas->resetWarp();
+      });
+
+      connect(
+          m_previewContentCombo, qOverload<int>(&QComboBox::currentIndexChanged), this,
+          [this](int idx) {
+        s_lastPreviewContent = idx;
+        if(m_preview)
+          m_preview->setPreviewContent(static_cast<PreviewContent>(idx));
+      });
+
+      section->setContentLayout(globalLayout);
+      inspectorLayout->addWidget(section);
     }
 
-    // Side-by-side: warp editor (left) + source rect canvas (right)
-    auto* canvasRow = new QHBoxLayout;
-    m_warpCanvas = new CornerWarpCanvas;
-    m_warpCanvas->setEnabled(false);
-    canvasRow->addWidget(m_warpCanvas);
-    m_canvas = new OutputMappingCanvas;
-    canvasRow->addWidget(m_canvas, 1);
-    multiLayout->addLayout(canvasRow);
+    // -- Section: Outputs (add/remove + selector buttons) --
+    {
+      auto* section = new CollapsibleSection(tr("Outputs"));
+      auto* outputsLayout = new QVBoxLayout;
 
-    // Add/Remove buttons
-    auto* btnLayout = new QHBoxLayout;
-    auto* addBtn = new QPushButton(tr("Add Output"));
-    auto* removeBtn = new QPushButton(tr("Remove Selected"));
-    btnLayout->addWidget(addBtn);
-    btnLayout->addWidget(removeBtn);
-    multiLayout->addLayout(btnLayout);
+      auto* addRemoveLayout = new QHBoxLayout;
+      auto* addBtn = new QPushButton(tr("Add"));
+      auto* removeBtn = new QPushButton(tr("Remove"));
+      addRemoveLayout->addWidget(addBtn);
+      addRemoveLayout->addWidget(removeBtn);
+      outputsLayout->addLayout(addRemoveLayout);
 
-    // Preview content combo
-    static int s_lastPreviewContent = 0;
-    m_previewContentCombo = new QComboBox;
-    m_previewContentCombo->addItem(tr("Black"));
-    m_previewContentCombo->addItem(tr("Per-Output Test Card"));
-    m_previewContentCombo->addItem(tr("Global Test Card"));
-    m_previewContentCombo->addItem(tr("Output ID"));
-    m_previewContentCombo->setCurrentIndex(s_lastPreviewContent);
-    btnLayout->addWidget(new QLabel(tr("Preview:")));
-    btnLayout->addWidget(m_previewContentCombo);
+      // Row of index buttons for quick selection
+      auto* buttonsWidget = new QWidget;
+      m_outputButtonsLayout = new QHBoxLayout(buttonsWidget);
+      m_outputButtonsLayout->setContentsMargins(0, 0, 0, 0);
+      m_outputButtonsLayout->setSpacing(2);
+      m_outputButtonsLayout->addStretch(1);
+      outputsLayout->addWidget(buttonsWidget);
 
-    auto* resetWarpBtn = new QPushButton(tr("Reset Warp"));
-    btnLayout->addWidget(resetWarpBtn);
-    connect(resetWarpBtn, &QPushButton::clicked, this, [this] {
-      if(m_warpCanvas)
-        m_warpCanvas->resetWarp();
-    });
+      connect(addBtn, &QPushButton::clicked, this, [this] {
+        m_canvas->addOutput();
 
-    m_syncPositionsCheck = new QCheckBox(tr("Sync Positions"));
-    m_syncPositionsCheck->setChecked(false);
-    m_syncPositionsCheck->setToolTip(
-        tr("Synchronize preview window positions and sizes with the output mappings"));
-    btnLayout->addWidget(m_syncPositionsCheck);
+        // Set initial window properties from source rect x input resolution
+        int inW = m_inputWidth->value();
+        int inH = m_inputHeight->value();
+        OutputMappingItem* newest = nullptr;
+        for(auto* item : m_canvas->scene()->items())
+          if(auto* mi = dynamic_cast<OutputMappingItem*>(item))
+            if(!newest || mi->outputIndex() > newest->outputIndex())
+              newest = mi;
+        if(newest)
+        {
+          auto r = newest->mapRectToScene(newest->rect());
+          double srcX = r.x() / m_canvas->canvasWidth();
+          double srcY = r.y() / m_canvas->canvasHeight();
+          double srcW = r.width() / m_canvas->canvasWidth();
+          double srcH = r.height() / m_canvas->canvasHeight();
+          newest->windowPosition = QPoint(int(srcX * inW), int(srcY * inH));
+          newest->windowSize
+              = QSize(qMax(1, int(srcW * inW)), qMax(1, int(srcH * inH)));
 
-    connect(
-        m_previewContentCombo, qOverload<int>(&QComboBox::currentIndexChanged), this,
-        [this](int idx) {
-      s_lastPreviewContent = idx;
-      if(m_preview)
-        m_preview->setPreviewContent(static_cast<PreviewContent>(idx));
-    });
+          // Mirror onto desktop canvas
+          if(m_desktopCanvas)
+            m_desktopCanvas->addOutput(newest->windowPosition, newest->windowSize);
+        }
 
-    connect(m_syncPositionsCheck, &QCheckBox::toggled, this, [this](bool checked) {
-      if(m_preview)
-        m_preview->setSyncPositions(checked);
-    });
+        rebuildOutputButtons();
+        syncPreview(true);
+      });
+      connect(removeBtn, &QPushButton::clicked, this, [this] {
+        int removedIdx = m_selectedOutput;
+        m_canvas->removeSelectedOutput();
+        if(m_desktopCanvas && removedIdx >= 0)
+          m_desktopCanvas->removeOutput(removedIdx);
+        m_selectedOutput = -1;
+        m_outputSectionsContainer->setVisible(false);
+        rebuildOutputButtons();
+        syncPreview(true);
+      });
 
-    connect(addBtn, &QPushButton::clicked, this, [this] {
-      m_canvas->addOutput();
+      section->setContentLayout(outputsLayout);
+      inspectorLayout->addWidget(section);
+    }
 
-      // Set initial window properties from source rect x input resolution
-      // (don't rely on deferred selectionChanged signal for auto-match)
-      int inW = m_inputWidth->value();
-      int inH = m_inputHeight->value();
-      OutputMappingItem* newest = nullptr;
-      for(auto* item : m_canvas->scene()->items())
-        if(auto* mi = dynamic_cast<OutputMappingItem*>(item))
-          if(!newest || mi->outputIndex() > newest->outputIndex())
-            newest = mi;
-      if(newest)
-      {
-        auto r = newest->mapRectToScene(newest->rect());
-        double srcX = r.x() / m_canvas->canvasWidth();
-        double srcY = r.y() / m_canvas->canvasHeight();
-        double srcW = r.width() / m_canvas->canvasWidth();
-        double srcH = r.height() / m_canvas->canvasHeight();
-        newest->windowPosition = QPoint(int(srcX * inW), int(srcY * inH));
-        newest->windowSize = QSize(qMax(1, int(srcW * inW)), qMax(1, int(srcH * inH)));
-      }
+    // -- Per-output sections container (hidden when no selection) --
+    m_outputSectionsContainer = new QWidget;
+    auto* outputSectionsLayout = new QVBoxLayout(m_outputSectionsContainer);
+    outputSectionsLayout->setContentsMargins(0, 0, 0, 0);
+    outputSectionsLayout->setSpacing(2);
+    m_outputSectionsContainer->setVisible(false);
 
-      syncPreview();
-    });
-    connect(removeBtn, &QPushButton::clicked, this, [this] {
-      m_canvas->removeSelectedOutput();
-      m_selectedOutput = -1;
-      syncPreview();
-    });
+    // -- Section: Source UV Mapping (expanded) --
+    {
+      auto* section = new CollapsibleSection(tr("Source UV Mapping"));
+      auto* srcLayout = new QFormLayout;
 
-    // Properties for selected output
-    auto* propGroup = new QGroupBox(tr("Selected Output Properties"));
-    auto* propLayout = new QFormLayout(propGroup);
+      m_srcX = new QDoubleSpinBox;
+      m_srcX->setRange(0.0, 1.0);
+      m_srcX->setSingleStep(0.01);
+      m_srcX->setDecimals(3);
+      m_srcY = new QDoubleSpinBox;
+      m_srcY->setRange(0.0, 1.0);
+      m_srcY->setSingleStep(0.01);
+      m_srcY->setDecimals(3);
+      auto* srcPosLayout = new QHBoxLayout;
+      srcPosLayout->addWidget(m_srcX);
+      srcPosLayout->addWidget(m_srcY);
+      m_srcPosPixelLabel = new QLabel;
+      srcPosLayout->addWidget(m_srcPosPixelLabel);
+      srcLayout->addRow(tr("Position"), srcPosLayout);
 
-    // Source rect (UV coordinates in the input texture)
-    m_srcX = new QDoubleSpinBox;
-    m_srcX->setRange(0.0, 1.0);
-    m_srcX->setSingleStep(0.01);
-    m_srcX->setDecimals(3);
-    m_srcY = new QDoubleSpinBox;
-    m_srcY->setRange(0.0, 1.0);
-    m_srcY->setSingleStep(0.01);
-    m_srcY->setDecimals(3);
-    auto* srcPosLayout = new QHBoxLayout;
-    srcPosLayout->addWidget(m_srcX);
-    srcPosLayout->addWidget(m_srcY);
-    m_srcPosPixelLabel = new QLabel;
-    srcPosLayout->addWidget(m_srcPosPixelLabel);
-    propLayout->addRow(tr("Source UV Pos"), srcPosLayout);
+      m_srcW = new QDoubleSpinBox;
+      m_srcW->setRange(0.01, 1.0);
+      m_srcW->setSingleStep(0.01);
+      m_srcW->setDecimals(3);
+      m_srcW->setValue(1.0);
+      m_srcH = new QDoubleSpinBox;
+      m_srcH->setRange(0.01, 1.0);
+      m_srcH->setSingleStep(0.01);
+      m_srcH->setDecimals(3);
+      m_srcH->setValue(1.0);
+      auto* srcSizeLayout = new QHBoxLayout;
+      srcSizeLayout->addWidget(m_srcW);
+      srcSizeLayout->addWidget(m_srcH);
+      m_srcSizePixelLabel = new QLabel;
+      srcSizeLayout->addWidget(m_srcSizePixelLabel);
+      srcLayout->addRow(tr("Size"), srcSizeLayout);
 
-    m_srcW = new QDoubleSpinBox;
-    m_srcW->setRange(0.01, 1.0);
-    m_srcW->setSingleStep(0.01);
-    m_srcW->setDecimals(3);
-    m_srcW->setValue(1.0);
-    m_srcH = new QDoubleSpinBox;
-    m_srcH->setRange(0.01, 1.0);
-    m_srcH->setSingleStep(0.01);
-    m_srcH->setDecimals(3);
-    m_srcH->setValue(1.0);
-    auto* srcSizeLayout = new QHBoxLayout;
-    srcSizeLayout->addWidget(m_srcW);
-    srcSizeLayout->addWidget(m_srcH);
-    m_srcSizePixelLabel = new QLabel;
-    srcSizeLayout->addWidget(m_srcSizePixelLabel);
-    propLayout->addRow(tr("Source UV Size"), srcSizeLayout);
+      section->setContentLayout(srcLayout);
+      outputSectionsLayout->addWidget(section);
+    }
 
-    // Output window properties
-    m_screenCombo = new QComboBox;
-    m_screenCombo->addItem(tr("Default"));
-    for(auto* screen : qApp->screens())
-      m_screenCombo->addItem(screen->name());
-    propLayout->addRow(tr("Screen"), m_screenCombo);
+    // -- Section: Window Properties (expanded) --
+    {
+      auto* section = new CollapsibleSection(tr("Window Properties"));
+      auto* winLayout = new QFormLayout;
 
-    m_winPosX = new QSpinBox;
-    m_winPosX->setRange(0, 16384);
-    m_winPosY = new QSpinBox;
-    m_winPosY->setRange(0, 16384);
-    auto* posLayout = new QHBoxLayout;
-    posLayout->addWidget(m_winPosX);
-    posLayout->addWidget(m_winPosY);
-    propLayout->addRow(tr("Window Pos"), posLayout);
+      m_screenCombo = new QComboBox;
+      m_screenCombo->addItem(tr("Default"));
+      for(auto* screen : qApp->screens())
+        m_screenCombo->addItem(screen->name());
+      winLayout->addRow(tr("Screen"), m_screenCombo);
 
-    m_winWidth = new QSpinBox;
-    m_winWidth->setRange(1, 16384);
-    m_winWidth->setValue(1280);
-    m_winHeight = new QSpinBox;
-    m_winHeight->setRange(1, 16384);
-    m_winHeight->setValue(720);
-    auto* sizeLayout = new QHBoxLayout;
-    sizeLayout->addWidget(m_winWidth);
-    sizeLayout->addWidget(m_winHeight);
-    propLayout->addRow(tr("Window Size"), sizeLayout);
+      m_winPosX = new QSpinBox;
+      m_winPosX->setRange(-32768, 32768);
+      m_winPosY = new QSpinBox;
+      m_winPosY->setRange(-32768, 32768);
+      auto* posLayout = new QHBoxLayout;
+      posLayout->addWidget(m_winPosX);
+      posLayout->addWidget(m_winPosY);
+      winLayout->addRow(tr("Window Pos"), posLayout);
 
-    m_fullscreenCheck = new QCheckBox;
-    propLayout->addRow(tr("Fullscreen"), m_fullscreenCheck);
+      m_winWidth = new QSpinBox;
+      m_winWidth->setRange(1, 16384);
+      m_winWidth->setValue(1280);
+      m_winHeight = new QSpinBox;
+      m_winHeight->setRange(1, 16384);
+      m_winHeight->setValue(720);
+      auto* sizeLayout = new QHBoxLayout;
+      sizeLayout->addWidget(m_winWidth);
+      sizeLayout->addWidget(m_winHeight);
+      winLayout->addRow(tr("Window Size"), sizeLayout);
 
-    // Soft-edge blending controls
-    auto* blendGroup = new QGroupBox(tr("Soft-Edge Blending"));
-    auto* blendLayout = new QFormLayout(blendGroup);
+      m_fullscreenCheck = new QCheckBox;
+      winLayout->addRow(tr("Fullscreen"), m_fullscreenCheck);
 
-    auto makeBlendRow = [&](const QString& label, QDoubleSpinBox*& widthSpin,
-                            QDoubleSpinBox*& gammaSpin) {
-      widthSpin = new QDoubleSpinBox;
-      widthSpin->setRange(0.0, 0.5);
-      widthSpin->setSingleStep(0.01);
-      widthSpin->setDecimals(3);
-      widthSpin->setValue(0.0);
-      gammaSpin = new QDoubleSpinBox;
-      gammaSpin->setRange(0.1, 4.0);
-      gammaSpin->setSingleStep(0.1);
-      gammaSpin->setDecimals(2);
-      gammaSpin->setValue(2.2);
-      auto* row = new QHBoxLayout;
-      row->addWidget(new QLabel(tr("Width")));
-      row->addWidget(widthSpin);
-      row->addWidget(new QLabel(tr("Gamma")));
-      row->addWidget(gammaSpin);
-      row->addStretch(1);
-      blendLayout->addRow(label, row);
-    };
+      m_lockModeCombo = new QComboBox;
+      m_lockModeCombo->addItem(tr("Free"));
+      m_lockModeCombo->addItem(tr("Aspect Ratio"));
+      m_lockModeCombo->addItem(tr("1:1 Pixel"));
+      m_lockModeCombo->addItem(tr("Full Lock"));
+      m_lockModeCombo->setToolTip(tr(
+          "Free: no constraints\n"
+          "Aspect Ratio: output window preserves input section aspect ratio\n"
+          "1:1 Pixel: output window size matches input source rect pixels exactly\n"
+          "Full Lock: cannot move or resize in graphics scenes"));
+      winLayout->addRow(tr("Lock Mode"), m_lockModeCombo);
 
-    makeBlendRow(tr("Left"), m_blendLeftW, m_blendLeftG);
-    makeBlendRow(tr("Right"), m_blendRightW, m_blendRightG);
-    makeBlendRow(tr("Top"), m_blendTopW, m_blendTopG);
-    makeBlendRow(tr("Bottom"), m_blendBottomW, m_blendBottomG);
+      section->setContentLayout(winLayout);
+      outputSectionsLayout->addWidget(section);
+    }
 
-    propLayout->addRow(blendGroup);
+    // -- Section: Soft-Edge Blending (collapsed) --
+    {
+      auto* section = new CollapsibleSection(tr("Soft-Edge Blending"));
+      auto* blendLayout = new QFormLayout;
 
-    propGroup->setEnabled(false);
+      auto makeBlendRow = [&](const QString& label, QDoubleSpinBox*& widthSpin,
+                              QDoubleSpinBox*& gammaSpin) {
+        widthSpin = new QDoubleSpinBox;
+        widthSpin->setRange(0.0, 0.5);
+        widthSpin->setSingleStep(0.01);
+        widthSpin->setDecimals(3);
+        widthSpin->setValue(0.0);
+        gammaSpin = new QDoubleSpinBox;
+        gammaSpin->setRange(0.1, 4.0);
+        gammaSpin->setSingleStep(0.1);
+        gammaSpin->setDecimals(2);
+        gammaSpin->setValue(2.2);
+        auto* row = new QHBoxLayout;
+        row->addWidget(new QLabel(tr("Width")));
+        row->addWidget(widthSpin);
+        row->addWidget(new QLabel(tr("Gamma")));
+        row->addWidget(gammaSpin);
+        row->addStretch(1);
+        blendLayout->addRow(label, row);
+      };
 
-    auto* scrollArea = new QScrollArea;
-    scrollArea->setWidget(propGroup);
-    scrollArea->setWidgetResizable(true);
-    scrollArea->setFrameShape(QFrame::NoFrame);
-    multiLayout->addWidget(scrollArea, 1);
+      makeBlendRow(tr("Left"), m_blendLeftW, m_blendLeftG);
+      makeBlendRow(tr("Right"), m_blendRightW, m_blendRightG);
+      makeBlendRow(tr("Top"), m_blendTopW, m_blendTopG);
+      makeBlendRow(tr("Bottom"), m_blendBottomW, m_blendBottomG);
 
-    m_canvas->onSelectionChanged = [this, propGroup](int idx) {
+      section->setContentLayout(blendLayout);
+      section->setExpanded(false);
+      outputSectionsLayout->addWidget(section);
+    }
+
+    inspectorLayout->addWidget(m_outputSectionsContainer);
+    inspectorLayout->addStretch(1);
+    scrollArea->setWidget(m_inspectorPanel);
+    splitter->addWidget(scrollArea);
+
+    // Set splitter proportions: canvas gets more space
+    splitter->setStretchFactor(0, 3);
+    splitter->setStretchFactor(1, 1);
+
+    multiLayout->addWidget(splitter, 1);
+
+    // === Wiring ===
+
+    // Input mapping canvas selection -> update properties + cross-select desktop
+    m_canvas->onSelectionChanged = [this](int idx) {
+      if(m_syncing)
+        return;
+      m_syncing = true;
       m_selectedOutput = idx;
-      propGroup->setEnabled(idx >= 0);
-      if(m_warpCanvas)
-        m_warpCanvas->setEnabled(idx >= 0);
+      m_outputSectionsContainer->setVisible(idx >= 0);
+      rebuildOutputButtons();
       if(idx >= 0)
+      {
         updatePropertiesFromSelection();
-      else if(m_warpCanvas)
-        m_warpCanvas->setWarp(CornerWarp{});
+        if(m_desktopCanvas)
+          m_desktopCanvas->selectItem(idx);
+      }
+      // Exit warp mode if selection changes to a different item
+      if(m_canvas->inWarpMode() && m_canvas->inWarpMode())
+        m_canvas->exitWarpMode();
+      m_syncing = false;
     };
 
     m_canvas->onItemGeometryChanged = [this](int idx) {
       if(idx == m_selectedOutput)
         updatePropertiesFromSelection();
-      syncPreview();
+      // Sync desktop canvas item position/size from mapping item's window properties
+      syncDesktopCanvasFromMappingItem(idx);
+      syncPreview(false); // Input mapping changes don't sync preview positions
     };
 
-    // Wire corner warp canvas changes back to the selected item
-    m_warpCanvas->onChanged = [this] {
-      if(!m_canvas || m_selectedOutput < 0)
+    // Desktop canvas selection -> cross-select input mapping canvas
+    m_desktopCanvas->onSelectionChanged = [this](int idx) {
+      if(m_syncing)
         return;
-      for(auto* item : m_canvas->scene()->items())
+      m_syncing = true;
+      m_selectedOutput = idx;
+      m_outputSectionsContainer->setVisible(idx >= 0);
+      rebuildOutputButtons();
+      if(idx >= 0)
       {
-        if(auto* mi = dynamic_cast<OutputMappingItem*>(item))
+        // Exit warp mode when selection changes from desktop canvas
+        if(m_canvas->inWarpMode())
+          m_canvas->exitWarpMode();
+
+        // Select same item in input mapping canvas
+        if(m_canvas && m_canvas->scene())
         {
-          if(mi->outputIndex() == m_selectedOutput)
+          m_canvas->scene()->clearSelection();
+          for(auto* item : m_canvas->scene()->items())
           {
-            mi->cornerWarp = m_warpCanvas->getWarp();
-            syncPreview();
-            return;
+            if(auto* mi = dynamic_cast<OutputMappingItem*>(item))
+            {
+              if(mi->outputIndex() == idx)
+              {
+                mi->setSelected(true);
+                break;
+              }
+            }
+          }
+        }
+        updatePropertiesFromSelection();
+      }
+      m_syncing = false;
+    };
+
+    // Desktop canvas item moved/resized -> update mapping item window properties + spinboxes
+    m_desktopCanvas->onItemGeometryChanged = [this](int idx) {
+      if(m_syncing)
+        return;
+      m_syncing = true;
+
+      // Find the desktop item and read back its position/size
+      for(auto* item : m_desktopCanvas->scene()->items())
+      {
+        if(auto* di = dynamic_cast<DesktopLayoutItem*>(item))
+        {
+          if(di->outputIndex() == idx)
+          {
+            auto sceneRect = di->mapRectToScene(di->rect());
+            QPointF desktopPos = m_desktopCanvas->sceneToDesktop(sceneRect.topLeft());
+            QSize desktopSize
+                = m_desktopCanvas->sceneSizeToDesktop(sceneRect.size());
+
+            // Update the mapping item
+            if(m_canvas)
+            {
+              for(auto* mitem : m_canvas->scene()->items())
+              {
+                if(auto* mi = dynamic_cast<OutputMappingItem*>(mitem))
+                {
+                  if(mi->outputIndex() == idx)
+                  {
+                    mi->windowPosition
+                        = QPoint((int)desktopPos.x(), (int)desktopPos.y());
+                    mi->windowSize = desktopSize;
+
+                    // Auto-detect screen
+                    QRect winRect(mi->windowPosition, mi->windowSize);
+                    int screenIdx = m_desktopCanvas->detectScreen(winRect);
+                    mi->screenIndex = screenIdx;
+                    break;
+                  }
+                }
+              }
+            }
+
+            // Update spinboxes if this is the selected output
+            if(idx == m_selectedOutput)
+            {
+              const QSignalBlocker b1(m_winPosX);
+              const QSignalBlocker b2(m_winPosY);
+              const QSignalBlocker b3(m_winWidth);
+              const QSignalBlocker b4(m_winHeight);
+              const QSignalBlocker b5(m_screenCombo);
+
+              m_winPosX->setValue((int)desktopPos.x());
+              m_winPosY->setValue((int)desktopPos.y());
+              m_winWidth->setValue(desktopSize.width());
+              m_winHeight->setValue(desktopSize.height());
+
+              // Update screen combo from auto-detection
+              QRect winRect(QPoint((int)desktopPos.x(), (int)desktopPos.y()), desktopSize);
+              int screenIdx = m_desktopCanvas->detectScreen(winRect);
+              m_screenCombo->setCurrentIndex(screenIdx + 1);
+            }
+            break;
           }
         }
       }
+
+      syncPreview(true); // Desktop layout changes always sync preview positions
+      m_syncing = false;
     };
 
-    // Wire window property changes back to the selected canvas item
-    auto applyProps = [this] { applyPropertiesToSelection(); };
+    // Wire warp mode changes to preview sync
+    m_canvas->onWarpChanged = [this] {
+      syncPreview(false); // Warp is an input concern
+    };
+
+    // Wire window property spinbox changes -> mapping item + desktop canvas
+    auto applyProps = [this] {
+      applyPropertiesToSelection();
+      syncDesktopCanvasFromMappingItem(m_selectedOutput);
+      syncPreview(true); // Direct property edits are output concerns
+    };
     connect(
-        m_screenCombo, qOverload<int>(&QComboBox::currentIndexChanged), this,
-        applyProps);
+        m_screenCombo, qOverload<int>(&QComboBox::currentIndexChanged), this, applyProps);
     connect(m_winPosX, qOverload<int>(&QSpinBox::valueChanged), this, applyProps);
     connect(m_winPosY, qOverload<int>(&QSpinBox::valueChanged), this, applyProps);
     connect(m_winWidth, qOverload<int>(&QSpinBox::valueChanged), this, applyProps);
     connect(m_winHeight, qOverload<int>(&QSpinBox::valueChanged), this, applyProps);
     connect(m_fullscreenCheck, &QCheckBox::toggled, this, applyProps);
     connect(
-        m_blendLeftW, qOverload<double>(&QDoubleSpinBox::valueChanged), this,
-        applyProps);
+        m_lockModeCombo, qOverload<int>(&QComboBox::currentIndexChanged), this, applyProps);
     connect(
-        m_blendLeftG, qOverload<double>(&QDoubleSpinBox::valueChanged), this,
-        applyProps);
+        m_blendLeftW, qOverload<double>(&QDoubleSpinBox::valueChanged), this, applyProps);
+    connect(
+        m_blendLeftG, qOverload<double>(&QDoubleSpinBox::valueChanged), this, applyProps);
     connect(
         m_blendRightW, qOverload<double>(&QDoubleSpinBox::valueChanged), this,
         applyProps);
@@ -417,11 +613,9 @@ void WindowSettingsWidget::onModeChanged(int index)
       if(m_previewContentCombo)
         m_preview->setPreviewContent(
             static_cast<PreviewContent>(m_previewContentCombo->currentIndex()));
-      if(m_syncPositionsCheck)
-        m_preview->setSyncPositions(m_syncPositionsCheck->isChecked());
       m_preview->setInputResolution(
           QSize(m_inputWidth->value(), m_inputHeight->value()));
-      syncPreview();
+      syncPreview(true);
     }
   }
 }
@@ -444,6 +638,7 @@ void WindowSettingsWidget::updatePropertiesFromSelection()
         const QSignalBlocker b4(m_winWidth);
         const QSignalBlocker b5(m_winHeight);
         const QSignalBlocker b6(m_fullscreenCheck);
+        const QSignalBlocker b6a(m_lockModeCombo);
         const QSignalBlocker b7(m_srcX);
         const QSignalBlocker b8(m_srcY);
         const QSignalBlocker b9(m_srcW);
@@ -464,6 +659,12 @@ void WindowSettingsWidget::updatePropertiesFromSelection()
         m_winWidth->setValue(mi->windowSize.width());
         m_winHeight->setValue(mi->windowSize.height());
         m_fullscreenCheck->setChecked(mi->fullscreen);
+        m_lockModeCombo->setCurrentIndex(int(mi->lockMode));
+
+        // Disable size spinboxes when size is locked
+        const bool sizeLocked = (mi->lockMode == OutputLockMode::OneToOne);
+        m_winWidth->setEnabled(!sizeLocked);
+        m_winHeight->setEnabled(!sizeLocked);
 
         {
           const QSignalBlocker b11(m_blendLeftW);
@@ -484,9 +685,6 @@ void WindowSettingsWidget::updatePropertiesFromSelection()
           m_blendBottomW->setValue(mi->blendBottom.width);
           m_blendBottomG->setValue(mi->blendBottom.gamma);
         }
-
-        if(m_warpCanvas)
-          m_warpCanvas->setWarp(mi->cornerWarp);
 
         updatePixelLabels();
         return;
@@ -509,8 +707,74 @@ void WindowSettingsWidget::applyPropertiesToSelection()
         mi->screenIndex
             = m_screenCombo->currentIndex() - 1; // -1 because index 0 is "Default"
         mi->windowPosition = QPoint(m_winPosX->value(), m_winPosY->value());
-        mi->windowSize = QSize(m_winWidth->value(), m_winHeight->value());
         mi->fullscreen = m_fullscreenCheck->isChecked();
+
+        auto oldLockMode = mi->lockMode;
+        mi->lockMode = OutputLockMode(m_lockModeCombo->currentIndex());
+
+        // 1:1 pixel lock: compute window size from source rect x input resolution
+        if(mi->lockMode == OutputLockMode::OneToOne)
+        {
+          auto sceneRect = mi->mapRectToScene(mi->rect());
+          double srcW = sceneRect.width() / m_canvas->canvasWidth();
+          double srcH = sceneRect.height() / m_canvas->canvasHeight();
+          int pxW = qMax(1, (int)(srcW * m_inputWidth->value()));
+          int pxH = qMax(1, (int)(srcH * m_inputHeight->value()));
+          mi->windowSize = QSize(pxW, pxH);
+
+          const QSignalBlocker bw(m_winWidth);
+          const QSignalBlocker bh(m_winHeight);
+          m_winWidth->setValue(pxW);
+          m_winHeight->setValue(pxH);
+          m_winWidth->setEnabled(false);
+          m_winHeight->setEnabled(false);
+        }
+        else if(mi->lockMode == OutputLockMode::AspectRatio)
+        {
+          // Enforce aspect ratio: adjust height to match source aspect
+          auto sceneRect = mi->mapRectToScene(mi->rect());
+          double srcW = sceneRect.width() / m_canvas->canvasWidth();
+          double srcH = sceneRect.height() / m_canvas->canvasHeight();
+          double aspect = (srcW * m_inputWidth->value())
+                          / qMax(1.0, srcH * m_inputHeight->value());
+
+          int w = m_winWidth->value();
+          int h = qMax(1, (int)(w / aspect));
+          mi->windowSize = QSize(w, h);
+
+          const QSignalBlocker bh(m_winHeight);
+          m_winHeight->setValue(h);
+          m_winWidth->setEnabled(true);
+          m_winHeight->setEnabled(false);
+        }
+        else
+        {
+          mi->windowSize = QSize(m_winWidth->value(), m_winHeight->value());
+          m_winWidth->setEnabled(true);
+          m_winHeight->setEnabled(true);
+        }
+
+        // Update locked state if changed
+        if(mi->lockMode != oldLockMode)
+        {
+          mi->applyLockedState();
+          // Also update the desktop canvas item
+          if(m_desktopCanvas)
+          {
+            for(auto* ditem : m_desktopCanvas->scene()->items())
+            {
+              if(auto* di = dynamic_cast<DesktopLayoutItem*>(ditem))
+              {
+                if(di->outputIndex() == mi->outputIndex())
+                {
+                  di->lockMode = mi->lockMode;
+                  di->applyLockedState();
+                  break;
+                }
+              }
+            }
+          }
+        }
 
         mi->blendLeft = {(float)m_blendLeftW->value(), (float)m_blendLeftG->value()};
         mi->blendRight = {(float)m_blendRightW->value(), (float)m_blendRightG->value()};
@@ -518,7 +782,7 @@ void WindowSettingsWidget::applyPropertiesToSelection()
         mi->blendBottom
             = {(float)m_blendBottomW->value(), (float)m_blendBottomG->value()};
         mi->update(); // Repaint to show blend zones
-        syncPreview();
+        // NOTE: caller is responsible for calling syncPreview with the correct flag
         return;
       }
     }
@@ -547,7 +811,7 @@ void WindowSettingsWidget::applySourceRectToSelection()
         mi->setPos(0, 0);
         mi->setRect(newSceneRect);
         mi->onChanged = std::move(savedCallback);
-        syncPreview();
+        syncPreview(false); // Source rect is an input concern
         return;
       }
     }
@@ -573,8 +837,35 @@ void WindowSettingsWidget::updatePixelLabels()
   if(m_srcSizePixelLabel)
     m_srcSizePixelLabel->setText(QStringLiteral("%1 x %2 px").arg(pxW).arg(pxH));
 
+  // If 1:1 pixel lock is active, always update window size from source rect
+  const auto curLockMode = m_lockModeCombo
+                               ? OutputLockMode(m_lockModeCombo->currentIndex())
+                               : OutputLockMode::Free;
+  if(curLockMode == OutputLockMode::OneToOne && m_selectedOutput >= 0)
+  {
+    const QSignalBlocker bw(m_winWidth);
+    const QSignalBlocker bh(m_winHeight);
+    m_winWidth->setValue(pxW);
+    m_winHeight->setValue(pxH);
+    applyPropertiesToSelection();
+    syncDesktopCanvasFromMappingItem(m_selectedOutput);
+    syncPreview(true); // Window size changed as a consequence — sync preview
+  }
+  else if(curLockMode == OutputLockMode::AspectRatio && m_selectedOutput >= 0)
+  {
+    // Recompute height from current width to maintain aspect ratio
+    double aspect = (double)pxW / qMax(1, pxH);
+    int curW = m_winWidth->value();
+    int newH = qMax(1, (int)(curW / aspect));
+
+    const QSignalBlocker bh(m_winHeight);
+    m_winHeight->setValue(newH);
+    applyPropertiesToSelection();
+    syncDesktopCanvasFromMappingItem(m_selectedOutput);
+    syncPreview(true); // Window size changed as a consequence — sync preview
+  }
   // Auto-match window pos/size when screen is "Default" (combo index 0 = screenIndex -1)
-  if(m_screenCombo && m_screenCombo->currentIndex() == 0 && m_selectedOutput >= 0)
+  else if(m_screenCombo && m_screenCombo->currentIndex() == 0 && m_selectedOutput >= 0)
   {
     const QSignalBlocker bx(m_winPosX);
     const QSignalBlocker by(m_winPosY);
@@ -587,13 +878,141 @@ void WindowSettingsWidget::updatePixelLabels()
     m_winHeight->setValue(pxH);
 
     applyPropertiesToSelection();
+    syncDesktopCanvasFromMappingItem(m_selectedOutput);
   }
 }
 
-void WindowSettingsWidget::syncPreview()
+void WindowSettingsWidget::rebuildOutputButtons()
+{
+  if(!m_outputButtonsLayout || !m_canvas)
+    return;
+
+  // Clear existing buttons
+  while(auto* item = m_outputButtonsLayout->takeAt(0))
+  {
+    delete item->widget();
+    delete item;
+  }
+
+  // Collect output indices
+  std::vector<int> indices;
+  for(auto* item : m_canvas->scene()->items())
+    if(auto* mi = dynamic_cast<OutputMappingItem*>(item))
+      indices.push_back(mi->outputIndex());
+  std::sort(indices.begin(), indices.end());
+
+  // Color palette matching OutputPreview/DesktopLayout
+  static const QColor colors[]
+      = {QColor(70, 130, 180),  QColor(180, 100, 60), QColor(80, 160, 80),
+         QColor(180, 70, 140),  QColor(160, 160, 60), QColor(100, 180, 180),
+         QColor(180, 130, 180), QColor(130, 130, 130)};
+
+  for(int idx : indices)
+  {
+    auto* btn = new QPushButton(QString::number(idx));
+    btn->setFixedSize(28, 28);
+    btn->setCheckable(true);
+    btn->setChecked(idx == m_selectedOutput);
+
+    QColor c = colors[idx % 8];
+    btn->setStyleSheet(QStringLiteral(
+        "QPushButton { background: %1; color: white; border: 2px solid transparent; "
+        "border-radius: 4px; font-weight: bold; }"
+        "QPushButton:checked { border-color: white; }"
+        "QPushButton:hover { background: %2; }")
+                           .arg(c.name(), c.lighter(130).name()));
+
+    connect(btn, &QPushButton::clicked, this, [this, idx] { selectOutput(idx); });
+    m_outputButtonsLayout->addWidget(btn);
+  }
+  m_outputButtonsLayout->addStretch(1);
+}
+
+void WindowSettingsWidget::selectOutput(int index)
+{
+  if(m_syncing)
+    return;
+  m_syncing = true;
+
+  m_selectedOutput = index;
+  m_outputSectionsContainer->setVisible(index >= 0);
+
+  // Select in input mapping canvas
+  if(m_canvas && m_canvas->scene())
+  {
+    if(m_canvas->inWarpMode())
+      m_canvas->exitWarpMode();
+    m_canvas->scene()->clearSelection();
+    for(auto* item : m_canvas->scene()->items())
+    {
+      if(auto* mi = dynamic_cast<OutputMappingItem*>(item))
+      {
+        if(mi->outputIndex() == index)
+        {
+          mi->setSelected(true);
+          break;
+        }
+      }
+    }
+  }
+
+  // Select in desktop canvas
+  if(m_desktopCanvas)
+    m_desktopCanvas->selectItem(index);
+
+  if(index >= 0)
+    updatePropertiesFromSelection();
+
+  rebuildOutputButtons();
+  m_syncing = false;
+}
+
+void WindowSettingsWidget::syncPreview(bool syncPositions)
 {
   if(m_preview && m_canvas)
+  {
+    m_preview->setSyncPositions(syncPositions);
     m_preview->syncToMappings(m_canvas->getMappings());
+  }
+}
+
+void WindowSettingsWidget::syncDesktopCanvasFromMappingItem(int index)
+{
+  if(!m_desktopCanvas || !m_canvas || m_syncing || index < 0)
+    return;
+
+  for(auto* item : m_canvas->scene()->items())
+  {
+    if(auto* mi = dynamic_cast<OutputMappingItem*>(item))
+    {
+      if(mi->outputIndex() == index)
+      {
+        m_desktopCanvas->updateItem(index, mi->windowPosition, mi->windowSize);
+
+        // Also sync lock mode and aspect ratio to desktop canvas item
+        for(auto* ditem : m_desktopCanvas->scene()->items())
+        {
+          if(auto* di = dynamic_cast<DesktopLayoutItem*>(ditem))
+          {
+            if(di->outputIndex() == index)
+            {
+              di->lockMode = mi->lockMode;
+              // Compute aspect ratio from source rect
+              auto sceneRect = mi->mapRectToScene(mi->rect());
+              double srcW = sceneRect.width() / m_canvas->canvasWidth();
+              double srcH = sceneRect.height() / m_canvas->canvasHeight();
+              double pxW = srcW * m_inputWidth->value();
+              double pxH = srcH * m_inputHeight->value();
+              di->aspectRatio = pxW / qMax(1.0, pxH);
+              di->applyLockedState();
+              break;
+            }
+          }
+        }
+        return;
+      }
+    }
+  }
 }
 
 Device::DeviceSettings WindowSettingsWidget::getSettings() const
@@ -652,7 +1071,13 @@ void WindowSettingsWidget::setSettings(const Device::DeviceSettings& settings)
     if(set.mode == WindowMode::MultiWindow && m_canvas)
     {
       m_canvas->setMappings(set.outputs);
-      syncPreview();
+      if(m_desktopCanvas)
+      {
+        m_desktopCanvas->refreshScreens();
+        m_desktopCanvas->setWindowItems(set.outputs);
+      }
+      rebuildOutputButtons();
+      syncPreview(true);
     }
   }
 }

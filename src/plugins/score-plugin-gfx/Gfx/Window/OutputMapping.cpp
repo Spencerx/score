@@ -2,6 +2,7 @@
 
 #include <QGraphicsScene>
 #include <QGraphicsSceneMouseEvent>
+#include <QKeyEvent>
 #include <QMouseEvent>
 
 namespace Gfx
@@ -10,9 +11,11 @@ namespace Gfx
 // --- OutputMappingItem implementation ---
 
 OutputMappingItem::OutputMappingItem(
-    int index, const QRectF& rect, QGraphicsItem* parent)
+    int index, const QRectF& rect, OutputMappingCanvas* canvas,
+    QGraphicsItem* parent)
     : QGraphicsRectItem(rect, parent)
     , m_index{index}
+    , m_canvas{canvas}
 {
   setFlags(
       QGraphicsItem::ItemIsMovable | QGraphicsItem::ItemIsSelectable
@@ -28,17 +31,60 @@ void OutputMappingItem::setOutputIndex(int idx)
   update();
 }
 
+void OutputMappingItem::applyLockedState()
+{
+  if(lockMode == OutputLockMode::FullLock)
+  {
+    setFlags(QGraphicsItem::ItemIsSelectable | QGraphicsItem::ItemSendsGeometryChanges);
+    setAcceptHoverEvents(false);
+  }
+  else
+  {
+    setFlags(
+        QGraphicsItem::ItemIsMovable | QGraphicsItem::ItemIsSelectable
+        | QGraphicsItem::ItemSendsGeometryChanges);
+    setAcceptHoverEvents(true);
+  }
+  update();
+}
+
 void OutputMappingItem::paint(
     QPainter* painter, const QStyleOptionGraphicsItem* option, QWidget* widget)
 {
+  // Selected items get brighter fill and come to foreground
+  const bool isLocked = (lockMode == OutputLockMode::FullLock);
+  if(isSelected())
+  {
+    setZValue(20);
+    if(isLocked)
+      setBrush(QBrush(QColor(180, 200, 255, 100)));
+    else
+      setBrush(QBrush(QColor(140, 190, 255, 120)));
+    setPen(QPen(Qt::yellow, 2));
+  }
+  else
+  {
+    setZValue(10);
+    if(isLocked)
+      setBrush(QBrush(QColor(80, 80, 80, 60)));
+    else
+      setBrush(QBrush(QColor(100, 150, 255, 80)));
+    setPen(QPen(Qt::white, 1));
+  }
+
   QGraphicsRectItem::paint(painter, option, widget);
 
   // Draw index label
-  painter->setPen(Qt::white);
+  painter->setPen(isLocked ? QColor(180, 180, 180) : QColor(Qt::white));
   auto font = painter->font();
   font.setPixelSize(14);
   painter->setFont(font);
-  painter->drawText(rect(), Qt::AlignCenter, QString::number(m_index));
+  QString label = QString::number(m_index);
+  static constexpr const char* lockLabels[]
+      = {nullptr, " [AR]", " [1:1]", " [L]"};
+  if(int(lockMode) > 0 && int(lockMode) <= 3)
+    label += QString::fromLatin1(lockLabels[int(lockMode)]);
+  painter->drawText(rect(), Qt::AlignCenter, label);
 
   // Draw blend zones as gradient overlays
   auto r = rect();
@@ -138,14 +184,6 @@ void OutputMappingItem::paint(
     drawHandle(blendBottom.width, false, false);
   }
 
-  // Draw selection highlight
-  if(isSelected())
-  {
-    QPen selPen(Qt::yellow, 2, Qt::DashLine);
-    painter->setPen(selPen);
-    painter->setBrush(Qt::NoBrush);
-    painter->drawRect(rect());
-  }
 }
 
 int OutputMappingItem::hitTestEdges(const QPointF& pos) const
@@ -206,11 +244,15 @@ QVariant OutputMappingItem::itemChange(GraphicsItemChange change, const QVariant
 {
   if(change == ItemPositionChange && scene())
   {
-    // Visual scene rect = pos + rect, so clamp pos such that
-    // pos + rect.topLeft >= sceneRect.topLeft and pos + rect.bottomRight <= sceneRect.bottomRight
     QPointF newPos = value.toPointF();
+
+    // Snap before clamping
+    if(m_canvas && m_canvas->snapEnabled())
+      newPos = m_canvas->snapPosition(this, newPos);
+
+    // Clamp to canvas bounds (not scene rect, which includes margin for warp handles)
     auto r = rect();
-    auto sr = scene()->sceneRect();
+    QRectF sr(0, 0, m_canvas ? m_canvas->canvasWidth() : 400, m_canvas ? m_canvas->canvasHeight() : 300);
 
     double minX = sr.left() - r.left();
     double maxX = sr.right() - r.right();
@@ -230,6 +272,13 @@ QVariant OutputMappingItem::itemChange(GraphicsItemChange change, const QVariant
 
 void OutputMappingItem::mousePressEvent(QGraphicsSceneMouseEvent* event)
 {
+  if(lockMode == OutputLockMode::FullLock)
+  {
+    // Allow selection but not movement
+    QGraphicsRectItem::mousePressEvent(event);
+    return;
+  }
+
   // Check blend handles first (they are inside the rect, so test before edges)
   m_blendHandle = hitTestBlendHandles(event->pos());
   if(m_blendHandle != BlendNone)
@@ -257,6 +306,12 @@ void OutputMappingItem::mousePressEvent(QGraphicsSceneMouseEvent* event)
 
 void OutputMappingItem::mouseMoveEvent(QGraphicsSceneMouseEvent* event)
 {
+  if(lockMode == OutputLockMode::FullLock)
+  {
+    event->accept();
+    return;
+  }
+
   const double scale = (event->modifiers() & Qt::ControlModifier) ? 0.1 : 1.0;
 
   if(m_blendHandle != BlendNone)
@@ -392,234 +447,15 @@ void OutputMappingItem::hoverMoveEvent(QGraphicsSceneHoverEvent* event)
   QGraphicsRectItem::hoverMoveEvent(event);
 }
 
-// --- CornerWarpCanvas implementation ---
-
-CornerWarpCanvas::CornerWarpCanvas(QWidget* parent)
-    : QGraphicsView(parent)
-{
-  setScene(&m_scene);
-  setFixedSize(210, 210);
-  m_scene.setSceneRect(0, 0, m_canvasSize, m_canvasSize);
-  setRenderHint(QPainter::Antialiasing);
-  setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
-  setVerticalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
-
-  // Border representing the unwarped output window (at 75% of canvas, centered)
-  const double margin = m_canvasSize * 0.125;
-  const double inner = m_canvasSize * 0.75;
-  m_border = m_scene.addRect(margin, margin, inner, inner, QPen(Qt::darkGray, 1));
-
-  // Quad outline
-  m_quadOutline = m_scene.addPolygon(QPolygonF(), QPen(QColor(100, 200, 255), 2));
-
-  // Corner handles: TL, TR, BL, BR
-  const double handleR = 6.0;
-  const QColor handleColors[4]
-      = {QColor(255, 80, 80), QColor(80, 255, 80), QColor(80, 80, 255),
-         QColor(255, 255, 80)};
-
-  for(int i = 0; i < 4; i++)
-  {
-    m_handles[i] = m_scene.addEllipse(
-        -handleR, -handleR, handleR * 2, handleR * 2, QPen(Qt::white, 1),
-        QBrush(handleColors[i]));
-    m_handles[i]->setFlag(QGraphicsItem::ItemIsMovable, true);
-    m_handles[i]->setZValue(10);
-  }
-
-  rebuildItems();
-}
-
-void CornerWarpCanvas::setWarp(const CornerWarp& warp)
-{
-  m_warp = warp;
-  rebuildItems();
-}
-
-CornerWarp CornerWarpCanvas::getWarp() const
-{
-  return m_warp;
-}
-
-void CornerWarpCanvas::resetWarp()
-{
-  m_warp = CornerWarp{};
-  rebuildItems();
-  if(onChanged)
-    onChanged();
-}
-
-void CornerWarpCanvas::setEnabled(bool enabled)
-{
-  for(int i = 0; i < 4; i++)
-    m_handles[i]->setFlag(QGraphicsItem::ItemIsMovable, enabled);
-  QGraphicsView::setEnabled(enabled);
-}
-
-void CornerWarpCanvas::resizeEvent(QResizeEvent* event)
-{
-  QGraphicsView::resizeEvent(event);
-  fitInView(m_scene.sceneRect(), Qt::KeepAspectRatio);
-}
-
-void CornerWarpCanvas::rebuildItems()
-{
-  const double s = m_canvasSize;
-  const double margin = s * 0.125;
-  const double inner = s * 0.75;
-
-  // Map UV [0,1] to the central 75% of the canvas (with 12.5% margin on each side)
-  auto toScene = [margin, inner](const QPointF& uv) -> QPointF {
-    return QPointF(margin + uv.x() * inner, margin + uv.y() * inner);
-  };
-
-  const QPointF corners[4]
-      = {toScene(m_warp.topLeft), toScene(m_warp.topRight), toScene(m_warp.bottomLeft),
-         toScene(m_warp.bottomRight)};
-
-  // Position handles (blocking scene change events during setup)
-  for(int i = 0; i < 4; i++)
-  {
-    m_handles[i]->setPos(corners[i]);
-  }
-
-  updateLinesAndGrid();
-}
-
-void CornerWarpCanvas::updateLinesAndGrid()
-{
-  const double s = m_canvasSize;
-
-  // Read current positions from handles
-  QPointF tl = m_handles[0]->pos();
-  QPointF tr = m_handles[1]->pos();
-  QPointF bl = m_handles[2]->pos();
-  QPointF br = m_handles[3]->pos();
-
-  // Update quad outline
-  QPolygonF quad;
-  quad << tl << tr << br << bl << tl;
-  m_quadOutline->setPolygon(quad);
-
-  // Update grid lines (4x4 bilinear subdivision)
-  for(auto* line : m_gridLines)
-  {
-    m_scene.removeItem(line);
-    delete line;
-  }
-  m_gridLines.clear();
-
-  constexpr int gridN = 4;
-  QPen gridPen(QColor(100, 200, 255, 80), 1);
-
-  auto bilinear = [&](double u, double v) -> QPointF {
-    return (1 - u) * (1 - v) * tl + u * (1 - v) * tr + (1 - u) * v * bl + u * v * br;
-  };
-
-  // Horizontal grid lines
-  for(int r = 1; r < gridN; r++)
-  {
-    double v = (double)r / gridN;
-    for(int c = 0; c < gridN; c++)
-    {
-      double u0 = (double)c / gridN;
-      double u1 = (double)(c + 1) / gridN;
-      auto* line = m_scene.addLine(QLineF(bilinear(u0, v), bilinear(u1, v)), gridPen);
-      m_gridLines.push_back(line);
-    }
-  }
-
-  // Vertical grid lines
-  for(int c = 1; c < gridN; c++)
-  {
-    double u = (double)c / gridN;
-    for(int r = 0; r < gridN; r++)
-    {
-      double v0 = (double)r / gridN;
-      double v1 = (double)(r + 1) / gridN;
-      auto* line = m_scene.addLine(QLineF(bilinear(u, v0), bilinear(u, v1)), gridPen);
-      m_gridLines.push_back(line);
-    }
-  }
-}
-
-// We override the scene's mouse events via event filter style by installing
-// on the viewport. Instead, use the simpler approach: check handle positions
-// on scene changes.
-// Actually, let's use a simpler approach: override mousePressEvent/mouseMoveEvent/mouseReleaseEvent
-// to track when handles move.
-
-void CornerWarpCanvas::mousePressEvent(QMouseEvent* event)
-{
-  // Check if we're pressing on a handle
-  auto scenePos = mapToScene(event->pos());
-  m_dragHandle = -1;
-  for(int i = 0; i < 4; i++)
-  {
-    if(QLineF(scenePos, m_handles[i]->pos()).length() < 10.0)
-    {
-      m_dragHandle = i;
-      m_dragging = true;
-      m_handleAnchor = m_handles[i]->pos();
-      m_mouseAnchor = scenePos;
-      break;
-    }
-  }
-
-  if(m_dragHandle < 0)
-    QGraphicsView::mousePressEvent(event);
-}
-
-void CornerWarpCanvas::mouseMoveEvent(QMouseEvent* event)
-{
-  if(m_dragging && m_dragHandle >= 0)
-  {
-    const double scale = (event->modifiers() & Qt::ControlModifier) ? 0.1 : 1.0;
-    const double s = m_canvasSize;
-    const double margin = s * 0.125;
-    const double inner = s * 0.75;
-
-    auto scenePos = mapToScene(event->pos());
-    auto rawDelta = scenePos - m_mouseAnchor;
-    auto targetPos = m_handleAnchor + rawDelta * scale;
-
-    // Clamp handle to canvas bounds so it can never be lost
-    double cx = qBound(0.0, targetPos.x(), s);
-    double cy = qBound(0.0, targetPos.y(), s);
-    m_handles[m_dragHandle]->setPos(cx, cy);
-    // Convert scene coords back to UV
-    double u = (cx - margin) / inner;
-    double v = (cy - margin) / inner;
-
-    QPointF* corners[4]
-        = {&m_warp.topLeft, &m_warp.topRight, &m_warp.bottomLeft, &m_warp.bottomRight};
-    *corners[m_dragHandle] = QPointF(u, v);
-
-    updateLinesAndGrid();
-
-    if(onChanged)
-      onChanged();
-  }
-  else
-  {
-    QGraphicsView::mouseMoveEvent(event);
-  }
-}
-
-void CornerWarpCanvas::mouseReleaseEvent(QMouseEvent* event)
-{
-  QGraphicsView::mouseReleaseEvent(event);
-  m_dragging = false;
-  m_dragHandle = -1;
-}
-
 // --- OutputMappingCanvas implementation ---
 
 OutputMappingCanvas::OutputMappingCanvas(QWidget* parent)
     : QGraphicsView(parent)
 {
   setScene(&m_scene);
-  m_scene.setSceneRect(0, 0, m_canvasWidth, m_canvasHeight);
+  constexpr double margin = 30.0;
+  m_scene.setSceneRect(
+      -margin, -margin, m_canvasWidth + 2 * margin, m_canvasHeight + 2 * margin);
   setMinimumSize(200, 150);
   setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
   setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
@@ -701,7 +537,9 @@ void OutputMappingCanvas::updateAspectRatio(int inputWidth, int inputHeight)
     }
   }
 
-  m_scene.setSceneRect(0, 0, m_canvasWidth, m_canvasHeight);
+  constexpr double margin = 30.0;
+  m_scene.setSceneRect(
+      -margin, -margin, m_canvasWidth + 2 * margin, m_canvasHeight + 2 * margin);
   if(m_border)
     m_border->setRect(0, 0, m_canvasWidth, m_canvasHeight);
   fitInView(m_scene.sceneRect(), Qt::KeepAspectRatio);
@@ -736,7 +574,7 @@ void OutputMappingCanvas::setMappings(const std::vector<OutputMapping>& mappings
     QRectF sceneRect(
         m.sourceRect.x() * canvasWidth(), m.sourceRect.y() * canvasHeight(),
         m.sourceRect.width() * canvasWidth(), m.sourceRect.height() * canvasHeight());
-    auto* item = new OutputMappingItem(i, sceneRect);
+    auto* item = new OutputMappingItem(i, sceneRect, this);
     item->screenIndex = m.screenIndex;
     item->windowPosition = m.windowPosition;
     item->windowSize = m.windowSize;
@@ -746,6 +584,8 @@ void OutputMappingCanvas::setMappings(const std::vector<OutputMapping>& mappings
     item->blendTop = m.blendTop;
     item->blendBottom = m.blendBottom;
     item->cornerWarp = m.cornerWarp;
+    item->lockMode = m.lockMode;
+    item->applyLockedState();
     setupItemCallbacks(item);
     m_scene.addItem(item);
   }
@@ -783,6 +623,7 @@ std::vector<OutputMapping> OutputMappingCanvas::getMappings() const
     m.blendTop = item->blendTop;
     m.blendBottom = item->blendBottom;
     m.cornerWarp = item->cornerWarp;
+    m.lockMode = item->lockMode;
     result.push_back(m);
   }
   return result;
@@ -798,7 +639,7 @@ void OutputMappingCanvas::addOutput()
   // Place new output at a default position
   double x = (count * 30) % (int)(canvasWidth() - 100);
   double y = (count * 30) % (int)(canvasHeight() - 75);
-  auto* item = new OutputMappingItem(count, QRectF(x, y, 100, 75));
+  auto* item = new OutputMappingItem(count, QRectF(x, y, 100, 75), this);
   setupItemCallbacks(item);
   m_scene.addItem(item);
 
@@ -832,6 +673,390 @@ void OutputMappingCanvas::removeSelectedOutput()
   for(int i = 0; i < remaining.size(); ++i)
     remaining[i]->setOutputIndex(i);
 }
+
+void OutputMappingCanvas::setSnapEnabled(bool enabled)
+{
+  m_snapEnabled = enabled;
+}
+
+QPointF OutputMappingCanvas::snapPosition(
+    const OutputMappingItem* item, QPointF pos) const
+{
+  constexpr double threshold = 8.0;
+
+  QRectF itemRect(pos, item->rect().size());
+
+  // Collect snap edges: scene rect borders + other item borders
+  std::vector<double> hEdges, vEdges;
+
+  auto sr = m_scene.sceneRect();
+  hEdges.push_back(sr.left());
+  hEdges.push_back(sr.right());
+  vEdges.push_back(sr.top());
+  vEdges.push_back(sr.bottom());
+
+  for(auto* gi : m_scene.items())
+  {
+    auto* other = dynamic_cast<const OutputMappingItem*>(gi);
+    if(!other || other == item)
+      continue;
+    auto r = other->mapRectToScene(other->rect());
+    hEdges.push_back(r.left());
+    hEdges.push_back(r.right());
+    vEdges.push_back(r.top());
+    vEdges.push_back(r.bottom());
+  }
+
+  double bestDx = threshold + 1;
+  double snapX = pos.x();
+  for(double edge : hEdges)
+  {
+    double dLeft = std::abs(itemRect.left() - edge);
+    double dRight = std::abs(itemRect.right() - edge);
+    if(dLeft < bestDx)
+    {
+      bestDx = dLeft;
+      snapX = edge;
+    }
+    if(dRight < bestDx)
+    {
+      bestDx = dRight;
+      snapX = edge - itemRect.width();
+    }
+  }
+
+  double bestDy = threshold + 1;
+  double snapY = pos.y();
+  for(double edge : vEdges)
+  {
+    double dTop = std::abs(itemRect.top() - edge);
+    double dBottom = std::abs(itemRect.bottom() - edge);
+    if(dTop < bestDy)
+    {
+      bestDy = dTop;
+      snapY = edge;
+    }
+    if(dBottom < bestDy)
+    {
+      bestDy = dBottom;
+      snapY = edge - itemRect.height();
+    }
+  }
+
+  return QPointF(
+      bestDx <= threshold ? snapX : pos.x(), bestDy <= threshold ? snapY : pos.y());
+}
+
+OutputMappingItem* OutputMappingCanvas::findItemByIndex(int index) const
+{
+  for(auto* gi : m_scene.items())
+    if(auto* mi = dynamic_cast<OutputMappingItem*>(gi))
+      if(mi->outputIndex() == index)
+        return mi;
+  return nullptr;
+}
+
+void OutputMappingCanvas::enterWarpMode(int outputIndex)
+{
+  if(m_warpItemIndex == outputIndex)
+  {
+    exitWarpMode();
+    return;
+  }
+  exitWarpMode();
+
+  auto* item = findItemByIndex(outputIndex);
+  if(!item)
+    return;
+
+  m_warpItemIndex = outputIndex;
+
+  // Disable move/resize on all items
+  for(auto* gi : m_scene.items())
+    if(auto* mi = dynamic_cast<OutputMappingItem*>(gi))
+    {
+      mi->setFlag(QGraphicsItem::ItemIsMovable, false);
+      mi->setAcceptHoverEvents(false);
+    }
+
+  // Create corner handles: TL, TR, BL, BR
+  constexpr double handleR = 6.0;
+  const QColor handleColors[4]
+      = {QColor(255, 80, 80), QColor(80, 255, 80), QColor(80, 80, 255),
+         QColor(255, 255, 80)};
+
+  for(int i = 0; i < 4; i++)
+  {
+    m_warpHandles[i] = m_scene.addEllipse(
+        -handleR, -handleR, handleR * 2, handleR * 2, QPen(Qt::white, 1),
+        QBrush(handleColors[i]));
+    m_warpHandles[i]->setZValue(100);
+  }
+
+  m_warpQuad = m_scene.addPolygon(QPolygonF(), QPen(QColor(100, 200, 255), 2));
+  m_warpQuad->setZValue(99);
+
+  updateWarpVisuals();
+}
+
+void OutputMappingCanvas::exitWarpMode()
+{
+  if(m_warpItemIndex < 0)
+    return;
+
+  for(int i = 0; i < 4; i++)
+  {
+    if(m_warpHandles[i])
+    {
+      m_scene.removeItem(m_warpHandles[i]);
+      delete m_warpHandles[i];
+      m_warpHandles[i] = nullptr;
+    }
+  }
+  if(m_warpQuad)
+  {
+    m_scene.removeItem(m_warpQuad);
+    delete m_warpQuad;
+    m_warpQuad = nullptr;
+  }
+  for(auto* line : m_warpGrid)
+  {
+    m_scene.removeItem(line);
+    delete line;
+  }
+  m_warpGrid.clear();
+
+  m_warpItemIndex = -1;
+  m_warpDragging = false;
+  m_warpDragHandle = -1;
+
+  // Restore item flags based on their lock modes
+  for(auto* gi : m_scene.items())
+    if(auto* mi = dynamic_cast<OutputMappingItem*>(gi))
+      mi->applyLockedState();
+}
+
+void OutputMappingCanvas::resetWarp()
+{
+  // Reset warp for selected item (or warp-mode item)
+  int idx = m_warpItemIndex >= 0 ? m_warpItemIndex : -1;
+  if(idx < 0)
+  {
+    auto sel = m_scene.selectedItems();
+    for(auto* gi : sel)
+      if(auto* mi = dynamic_cast<OutputMappingItem*>(gi))
+      {
+        idx = mi->outputIndex();
+        break;
+      }
+  }
+  if(idx < 0)
+    return;
+
+  auto* item = findItemByIndex(idx);
+  if(!item)
+    return;
+
+  item->cornerWarp = CornerWarp{};
+  if(m_warpItemIndex >= 0)
+    updateWarpVisuals();
+  if(onWarpChanged)
+    onWarpChanged();
+}
+
+void OutputMappingCanvas::updateWarpVisuals()
+{
+  auto* item = findItemByIndex(m_warpItemIndex);
+  if(!item)
+    return;
+
+  auto r = item->mapRectToScene(item->rect());
+  const auto& warp = item->cornerWarp;
+
+  auto toScene = [&](const QPointF& uv) -> QPointF {
+    return QPointF(r.left() + uv.x() * r.width(), r.top() + uv.y() * r.height());
+  };
+
+  QPointF corners[4]
+      = {toScene(warp.topLeft), toScene(warp.topRight), toScene(warp.bottomLeft),
+         toScene(warp.bottomRight)};
+
+  for(int i = 0; i < 4; i++)
+    m_warpHandles[i]->setPos(corners[i]);
+
+  // Quad outline: TL → TR → BR → BL → TL
+  QPolygonF quad;
+  quad << corners[0] << corners[1] << corners[3] << corners[2] << corners[0];
+  m_warpQuad->setPolygon(quad);
+
+  // Grid lines (4x4 bilinear subdivision)
+  for(auto* line : m_warpGrid)
+  {
+    m_scene.removeItem(line);
+    delete line;
+  }
+  m_warpGrid.clear();
+
+  constexpr int gridN = 4;
+  QPen gridPen(QColor(100, 200, 255, 80), 1);
+
+  auto bilinear = [&](double u, double v) -> QPointF {
+    return (1 - u) * (1 - v) * corners[0] + u * (1 - v) * corners[1]
+           + (1 - u) * v * corners[2] + u * v * corners[3];
+  };
+
+  for(int row = 1; row < gridN; row++)
+  {
+    double v = (double)row / gridN;
+    for(int col = 0; col < gridN; col++)
+    {
+      double u0 = (double)col / gridN;
+      double u1 = (double)(col + 1) / gridN;
+      m_warpGrid.push_back(
+          m_scene.addLine(QLineF(bilinear(u0, v), bilinear(u1, v)), gridPen));
+    }
+  }
+  for(int col = 1; col < gridN; col++)
+  {
+    double u = (double)col / gridN;
+    for(int row = 0; row < gridN; row++)
+    {
+      double v0 = (double)row / gridN;
+      double v1 = (double)(row + 1) / gridN;
+      m_warpGrid.push_back(
+          m_scene.addLine(QLineF(bilinear(u, v0), bilinear(u, v1)), gridPen));
+    }
+  }
+}
+
+void OutputMappingCanvas::mouseDoubleClickEvent(QMouseEvent* event)
+{
+  auto scenePos = mapToScene(event->pos());
+
+  if(m_warpItemIndex >= 0)
+  {
+    // Don't exit if double-clicking on a handle
+    for(int i = 0; i < 4; i++)
+      if(m_warpHandles[i] && QLineF(scenePos, m_warpHandles[i]->pos()).length() < 10.0)
+      {
+        event->accept();
+        return;
+      }
+
+    // Double-click on a different item → switch; same or empty → exit
+    OutputMappingItem* hitItem = nullptr;
+    for(auto* gi : m_scene.items(scenePos))
+      if(auto* mi = dynamic_cast<OutputMappingItem*>(gi))
+      {
+        hitItem = mi;
+        break;
+      }
+
+    if(hitItem && hitItem->outputIndex() != m_warpItemIndex)
+      enterWarpMode(hitItem->outputIndex());
+    else
+      exitWarpMode();
+
+    event->accept();
+    return;
+  }
+
+  // Normal mode: double-click on item → enter warp mode
+  for(auto* gi : m_scene.items(scenePos))
+  {
+    if(auto* mi = dynamic_cast<OutputMappingItem*>(gi))
+    {
+      enterWarpMode(mi->outputIndex());
+      event->accept();
+      return;
+    }
+  }
+  QGraphicsView::mouseDoubleClickEvent(event);
+}
+
+void OutputMappingCanvas::mousePressEvent(QMouseEvent* event)
+{
+  if(m_warpItemIndex >= 0)
+  {
+    auto scenePos = mapToScene(event->pos());
+    m_warpDragHandle = -1;
+    for(int i = 0; i < 4; i++)
+    {
+      if(m_warpHandles[i] && QLineF(scenePos, m_warpHandles[i]->pos()).length() < 10.0)
+      {
+        m_warpDragHandle = i;
+        m_warpDragging = true;
+        m_warpHandleAnchor = m_warpHandles[i]->pos();
+        m_warpMouseAnchor = scenePos;
+        break;
+      }
+    }
+    event->accept();
+    return;
+  }
+  QGraphicsView::mousePressEvent(event);
+}
+
+void OutputMappingCanvas::mouseMoveEvent(QMouseEvent* event)
+{
+  if(m_warpItemIndex >= 0)
+  {
+    if(m_warpDragging && m_warpDragHandle >= 0)
+    {
+      auto* item = findItemByIndex(m_warpItemIndex);
+      if(!item)
+        return;
+
+      const double scale = (event->modifiers() & Qt::ControlModifier) ? 0.1 : 1.0;
+      auto r = item->mapRectToScene(item->rect());
+
+      auto scenePos = mapToScene(event->pos());
+      auto rawDelta = scenePos - m_warpMouseAnchor;
+      auto targetPos = m_warpHandleAnchor + rawDelta * scale;
+
+      // Convert to UV relative to item rect
+      double u = (targetPos.x() - r.left()) / r.width();
+      double v = (targetPos.y() - r.top()) / r.height();
+
+      QPointF* corners[4]
+          = {&item->cornerWarp.topLeft, &item->cornerWarp.topRight,
+             &item->cornerWarp.bottomLeft, &item->cornerWarp.bottomRight};
+      *corners[m_warpDragHandle] = QPointF(u, v);
+
+      updateWarpVisuals();
+
+      if(onWarpChanged)
+        onWarpChanged();
+    }
+    event->accept();
+    return;
+  }
+  QGraphicsView::mouseMoveEvent(event);
+}
+
+void OutputMappingCanvas::mouseReleaseEvent(QMouseEvent* event)
+{
+  if(m_warpItemIndex >= 0)
+  {
+    m_warpDragging = false;
+    m_warpDragHandle = -1;
+    event->accept();
+    return;
+  }
+  QGraphicsView::mouseReleaseEvent(event);
+}
+
+void OutputMappingCanvas::keyPressEvent(QKeyEvent* event)
+{
+  if(m_warpItemIndex >= 0 && event->key() == Qt::Key_Escape)
+  {
+    exitWarpMode();
+    event->accept();
+    return;
+  }
+  QGraphicsView::keyPressEvent(event);
+}
+
 }
 
 template <>
@@ -887,6 +1112,12 @@ void JSONReader::read(const Gfx::OutputMapping& n)
     stream.EndArray();
   }
 
+  if(n.lockMode != Gfx::OutputLockMode::Free)
+  {
+    stream.Key("LockMode");
+    stream.Int(int(n.lockMode));
+  }
+
   stream.EndObject();
 }
 
@@ -901,6 +1132,7 @@ void DataStreamReader::read(const Gfx::OutputMapping& n)
   m_stream << n.blendBottom.width << n.blendBottom.gamma;
   m_stream << n.cornerWarp.topLeft << n.cornerWarp.topRight << n.cornerWarp.bottomLeft
            << n.cornerWarp.bottomRight;
+  m_stream << int(n.lockMode);
 }
 
 template <>
@@ -914,6 +1146,7 @@ void DataStreamWriter::write(Gfx::OutputMapping& n)
   m_stream >> n.blendBottom.width >> n.blendBottom.gamma;
   m_stream >> n.cornerWarp.topLeft >> n.cornerWarp.topRight >> n.cornerWarp.bottomLeft
       >> n.cornerWarp.bottomRight;
+  { int lm{}; m_stream >> lm; n.lockMode = Gfx::OutputLockMode(lm); }
 }
 template <>
 void JSONWriter::write(Gfx::OutputMapping& n)
@@ -969,5 +1202,20 @@ void JSONWriter::write(Gfx::OutputMapping& n)
       n.cornerWarp.bottomLeft = {arr[4].GetDouble(), arr[5].GetDouble()};
       n.cornerWarp.bottomRight = {arr[6].GetDouble(), arr[7].GetDouble()};
     }
+  }
+  if(auto v = obj.tryGet("LockMode"))
+    n.lockMode = Gfx::OutputLockMode(v->toInt());
+  else
+  {
+    // Backward compatibility with old bool fields
+    bool lockSize = false, locked = false;
+    if(auto v2 = obj.tryGet("LockSizeToInput"))
+      lockSize = v2->toBool();
+    if(auto v2 = obj.tryGet("Locked"))
+      locked = v2->toBool();
+    if(locked)
+      n.lockMode = Gfx::OutputLockMode::FullLock;
+    else if(lockSize)
+      n.lockMode = Gfx::OutputLockMode::OneToOne;
   }
 }

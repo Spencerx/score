@@ -46,6 +46,14 @@ struct CornerWarp
   }
 };
 
+enum class OutputLockMode : int
+{
+  Free = 0,       // No constraints
+  AspectRatio = 1, // Output window preserves input section aspect ratio
+  OneToOne = 2,    // Output window size = input source rect pixels (1:1)
+  FullLock = 3     // Cannot move or resize in graphics scenes
+};
+
 struct OutputMapping
 {
   QRectF sourceRect{0.0, 0.0, 1.0, 1.0}; // UV coords in input texture
@@ -62,6 +70,8 @@ struct OutputMapping
 
   // 4-corner perspective warp (output UV space)
   CornerWarp cornerWarp;
+
+  OutputLockMode lockMode{OutputLockMode::Free};
 };
 
 }
