@@ -5,6 +5,7 @@
 #include <Gfx/Window/WindowDevice.hpp>
 #include <Gfx/Window/WindowSettingsWidget.hpp>
 
+#include <core/document/Document.hpp>
 #include <core/document/DocumentView.hpp>
 
 #include <ossia-qt/invoke.hpp>

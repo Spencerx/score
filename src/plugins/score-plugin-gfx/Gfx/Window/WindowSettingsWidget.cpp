@@ -11,6 +11,12 @@
 #include <Gfx/WindowDevice.hpp>
 
 #include <QSplitter>
+
+#include <score/application/GUIApplicationContext.hpp>
+#include <score/document/DocumentContext.hpp>
+
+#include <wobjectimpl.h>
+
 W_OBJECT_IMPL(Gfx::FlatHeaderButton)
 W_OBJECT_IMPL(Gfx::CollapsibleSection)
 namespace Gfx

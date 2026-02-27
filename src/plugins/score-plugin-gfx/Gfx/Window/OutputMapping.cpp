@@ -1,9 +1,14 @@
 #include "OutputMapping.hpp"
 
+#include <score/serialization/DataStreamVisitor.hpp>
+#include <score/serialization/JSONVisitor.hpp>
+
 #include <QGraphicsScene>
 #include <QGraphicsSceneMouseEvent>
 #include <QKeyEvent>
 #include <QMouseEvent>
+
+#include <wobjectimpl.h>
 
 namespace Gfx
 {
