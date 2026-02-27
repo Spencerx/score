@@ -171,6 +171,8 @@ set(HDRS
     Gfx/Settings/Factory.hpp
     
     Gfx/Window/BackgroundDevice.hpp
+    Gfx/Window/CollapsibleSection.hpp
+    Gfx/Window/DesktopLayout.hpp
     Gfx/Window/MultiWindowDevice.hpp
     Gfx/Window/OutputMapping.hpp
     Gfx/Window/OutputPreview.hpp
@@ -293,6 +295,7 @@ set(SRCS
     Gfx/Settings/View.cpp
     
     Gfx/Window/BackgroundDevice.cpp
+    Gfx/Window/DesktopLayout.cpp
     Gfx/Window/MultiWindowDevice.cpp
     Gfx/Window/OutputMapping.cpp
     Gfx/Window/OutputPreview.cpp
