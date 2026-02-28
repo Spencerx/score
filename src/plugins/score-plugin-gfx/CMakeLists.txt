@@ -206,7 +206,9 @@ set(HDRS
     score_plugin_gfx.hpp
 )
 
-set(SRCS
+set(SRCS    
+    Gfx/Window/OutputMapping.cpp # Must go before the others in unity build
+  
     ${SPOUT_SRCS}
     ${SYPHON_SRCS}
     ${KINECT2_SRCS}
@@ -294,7 +296,6 @@ set(SRCS
     Gfx/Settings/Presenter.cpp
     Gfx/Settings/View.cpp
     
-    Gfx/Window/OutputMapping.cpp # Must go before the others in unity build
     Gfx/Window/BackgroundDevice.cpp
     Gfx/Window/DesktopLayout.cpp
     Gfx/Window/MultiWindowDevice.cpp

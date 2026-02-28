@@ -927,13 +927,13 @@ void WindowSettingsWidget::rebuildOutputButtons()
     btn->setCheckable(true);
     btn->setChecked(idx == m_selectedOutput);
 
-    QColor c = colors[idx % 8];
-    btn->setStyleSheet(QStringLiteral(
-        "QPushButton { background: %1; color: white; border: 2px solid transparent; "
-        "border-radius: 4px; font-weight: bold; }"
-        "QPushButton:checked { border-color: white; }"
-        "QPushButton:hover { background: %2; }")
-                           .arg(c.name(), c.lighter(130).name()));
+    //QColor c = colors[idx % 8];
+    //btn->setStyleSheet(QStringLiteral(
+    //    "QPushButton { background: %1; color: white; border: 2px solid transparent; "
+    //    "border-radius: 4px; font-weight: bold; }"
+    //    "QPushButton:checked { border-color: white; }"
+    //    "QPushButton:hover { background: %2; }")
+    //                       .arg(c.name(), c.lighter(130).name()));
 
     connect(btn, &QPushButton::clicked, this, [this, idx] { selectOutput(idx); });
     m_outputButtonsLayout->addWidget(btn);
