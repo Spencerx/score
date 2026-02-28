@@ -294,10 +294,10 @@ set(SRCS
     Gfx/Settings/Presenter.cpp
     Gfx/Settings/View.cpp
     
+    Gfx/Window/OutputMapping.cpp # Must go before the others in unity build
     Gfx/Window/BackgroundDevice.cpp
     Gfx/Window/DesktopLayout.cpp
     Gfx/Window/MultiWindowDevice.cpp
-    Gfx/Window/OutputMapping.cpp
     Gfx/Window/OutputPreview.cpp
     Gfx/Window/TestCard.cpp
     Gfx/Window/WindowDevice.cpp
