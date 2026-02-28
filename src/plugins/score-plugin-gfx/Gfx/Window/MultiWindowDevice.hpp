@@ -9,6 +9,8 @@
 #include <ossia/network/generic/generic_node.hpp>
 
 #include <ossia-qt/invoke.hpp>
+
+#include <QGuiApplication>
 namespace Gfx
 {
 static score::gfx::MultiWindowNode*
@@ -253,7 +255,7 @@ public:
             if(!w)
               return;
 
-            const auto& cur_screens = qApp->screens();
+            const auto& cur_screens = qGuiApp->screens();
 
             // Try parsing as integer index first
             bool ok = false;
