@@ -104,29 +104,42 @@ inline bool copyParentFolderContents(const QString& rootPath, const QString& dst
   return copyDirectoryRecursively(parentFolder, dst);
 }
 
-inline void loadJSObjectFromString(
-    const QString& rootPath, const QByteArray& str, QQmlComponent& comp, bool is_ui)
+// Write str to a cache file on disk so that Qt's QML compilation cache can be used.
+// Returns the cache file path on success, empty string on failure.
+inline QString ensureJSCacheFile(const QByteArray& str, bool is_ui)
 {
 #if __has_include(<boost/hash2/xxh3.hpp>)
   static const auto cache_path = QStandardPaths::writableLocation(QStandardPaths::CacheLocation);
-  QFile f{cache_path + "/Script" + hashFileData(str) + (is_ui ? ".ui.qml" : ".qml")};
+  QString path = cache_path + "/Script" + hashFileData(str) + (is_ui ? ".ui.qml" : ".qml");
+  QFile f{path};
   if(f.open(QIODevice::ReadWrite))
   {
-    // Only way to make sure we hit the QML cache
     if(str != f.readAll())
     {
       f.resize(0);
       f.reset();
       f.write(str);
       f.flush();
-      f.close();
     }
+    f.close();
+    return path;
+  }
+#endif
+  return {};
+}
+
+inline void loadJSObjectFromString(
+    const QString& rootPath, const QByteArray& str, QQmlComponent& comp, bool is_ui)
+{
+  auto path = ensureJSCacheFile(str, is_ui);
+  if(!path.isEmpty())
+  {
+    static const auto cache_path = QStandardPaths::writableLocation(QStandardPaths::CacheLocation);
     copyParentFolderContents(rootPath, cache_path);
 
-    comp.loadUrl(QUrl::fromLocalFile(f.fileName()));
+    comp.loadUrl(QUrl::fromLocalFile(path));
   }
   else
-#endif
   {
     comp.setData(str, QUrl::fromLocalFile(rootPath));
   }
