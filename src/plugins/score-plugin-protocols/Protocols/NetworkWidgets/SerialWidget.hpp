@@ -28,7 +28,7 @@ public:
     m_host->setText("/dev/ttyUSB0");
 
     m_framing = new QComboBox{this};
-    m_framing->addItems({"Size prefixing", "SLIP"});
+    m_framing->addItems({"Size prefixing", "SLIP", "COBS"});
     m_framing->setCurrentIndex(1);
 
     layout->addRow(tr("Host"), m_host);

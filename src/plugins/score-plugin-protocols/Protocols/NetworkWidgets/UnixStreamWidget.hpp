@@ -24,7 +24,7 @@ public:
     m_host->setText("/tmp/ossia.socket");
 
     m_framing = new QComboBox{this};
-    m_framing->addItems({"Size prefixing", "SLIP"});
+    m_framing->addItems({"Size prefixing", "SLIP", "COBS"});
     m_framing->setCurrentIndex(1);
 
     layout->addRow(tr("Path"), m_host);
