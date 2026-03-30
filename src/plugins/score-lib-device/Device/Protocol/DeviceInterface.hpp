@@ -83,6 +83,7 @@ public:
   virtual void recreate(const Device::Node&); // Argument is the node of the
                                               // device, used for recreation
   virtual bool connected() const;
+  W_INVOKABLE(connected)
 
   void updateSettings(const Device::DeviceSettings&);
 
