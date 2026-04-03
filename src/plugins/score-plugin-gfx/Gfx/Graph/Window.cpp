@@ -150,7 +150,10 @@ void Window::render()
   {
     resizeSwapChain();
     if(!m_hasSwapChain)
+    {
+      requestUpdate();
       return;
+    }
     m_newlyExposed = false;
   }
 
