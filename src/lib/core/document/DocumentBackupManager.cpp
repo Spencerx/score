@@ -11,7 +11,9 @@
 #include <QSettings>
 #include <QVariant>
 
-score::DocumentBackupManager::DocumentBackupManager(
+namespace score
+{
+DocumentBackupManager::DocumentBackupManager(
     const QByteArray& data, score::Document& doc)
     : QObject{&doc}
     , m_doc{doc}
@@ -25,7 +27,7 @@ score::DocumentBackupManager::DocumentBackupManager(
   m_commandFile = new CommandBackupFile{doc.commandStack(), this};
 }
 
-score::DocumentBackupManager::DocumentBackupManager(
+DocumentBackupManager::DocumentBackupManager(
     const score::RestorableDocument& prev, Document& doc)
     : QObject{&doc}
     , m_doc{doc}
@@ -39,7 +41,7 @@ score::DocumentBackupManager::DocumentBackupManager(
   m_commandFile = new CommandBackupFile{doc.commandStack(), prev.commands, this};
 }
 
-score::DocumentBackupManager::~DocumentBackupManager()
+DocumentBackupManager::~DocumentBackupManager()
 {
 #if !defined(__EMSCRIPTEN__)
   // If we are getting there, it means that we could close the document
@@ -57,27 +59,27 @@ score::DocumentBackupManager::~DocumentBackupManager()
 #endif
 }
 
-QTemporaryFile& score::DocumentBackupManager::crashDataFile()
+QTemporaryFile& DocumentBackupManager::crashDataFile()
 {
   return m_modelFile;
 }
 
-score::CommandBackupFile& score::DocumentBackupManager::crashCommandFile()
+CommandBackupFile& DocumentBackupManager::crashCommandFile()
 {
   return *m_commandFile;
 }
 
-void score::DocumentBackupManager::updateBackupData()
+void DocumentBackupManager::updateBackupData()
 {
 #if !defined(__EMSCRIPTEN__)
   // Save the initial state of the document
-  QSettings s{score::OpenDocumentsFile::path(), QSettings::IniFormat};
+  QSettings s{OpenDocumentsFile::path(), QSettings::IniFormat};
 
   auto existing_files = s.value("score/docs").toMap();
-  existing_files.insert(
-      crashDataFile().fileName(),
-      QVariant::fromValue(
-          qMakePair(m_doc.metadata().fileName(), crashCommandFile().fileName())));
+  existing_files[crashDataFile().fileName()] = QVariant::fromValue(
+      qMakePair(m_doc.metadata().fileName(), crashCommandFile().fileName()));
   s.setValue("score/docs", existing_files);
 #endif
+}
+
 }

@@ -428,6 +428,7 @@ bool DocumentManager::saveDocumentAs(Document& doc, const QString& savename)
   {
     m_recentFiles->addRecentFile(savename);
     saveRecentFilesState();
+    doc.backupManager()->updateBackupData();
     return true;
   }
   else
