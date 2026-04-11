@@ -243,7 +243,7 @@ struct ISFHelpers
           else if(nm.contains("mouse", Qt::CaseInsensitive))
             port->setAddress(
                 State::AddressAccessor{
-                    State::Address{firstWindowDeviceName, {"cursor", "scaled"}}});
+                    State::Address{firstWindowDeviceName, {"cursor", "gl"}}});
         }
 
         if(auto it = previous_values.find(nm);

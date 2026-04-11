@@ -54,6 +54,7 @@ class window_device : public ossia::net::device_base
   QObject m_qtContext;
 
   ossia::net::parameter_base* scaled_win{};
+  ossia::net::parameter_base* gl_win{};
   ossia::net::parameter_base* abs_win{};
   ossia::net::parameter_base* abs_tablet_win{};
   ossia::net::parameter_base* size_param{};
@@ -215,6 +216,14 @@ public:
         node->add_child(std::move(scale_node));
       }
       {
+        // Same as scaled but with y down like opengl
+        auto scale_node = std::make_unique<ossia::net::generic_node>("gl", *this, *node);
+        gl_win = scale_node->create_parameter(ossia::val_type::VEC2F);
+        gl_win->set_domain(ossia::make_domain(0.f, 1.f));
+        gl_win->push_value(ossia::vec2f{0.f, 0.f});
+        node->add_child(std::move(scale_node));
+      }
+      {
         auto abs_node
             = std::make_unique<ossia::net::generic_node>("absolute", *this, *node);
         abs_win = abs_node->create_parameter(ossia::val_type::VEC2F);
@@ -238,12 +247,15 @@ public:
         node->add_child(std::move(visible));
       }
 
-      m_screen->onMouseMove = [this](QPointF screen, QPointF win) {
+      m_screen->onMouseMove = [this](const QPointF screen, const QPointF win) {
         if(const auto& w = m_screen->window())
         {
-          auto sz = w->size();
+          const auto sz = w->size();
           scaled_win->push_value(
               ossia::vec2f{float(win.x() / sz.width()), float(win.y() / sz.height())});
+          gl_win->push_value(
+              ossia::vec2f{
+                  float(win.x() / sz.width()), 1.f - float(win.y() / sz.height())});
           abs_win->push_value(ossia::vec2f{float(win.x()), float(win.y())});
         }
       };

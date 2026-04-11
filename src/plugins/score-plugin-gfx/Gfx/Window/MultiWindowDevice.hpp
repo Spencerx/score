@@ -45,6 +45,7 @@ class multiwindow_device : public ossia::net::device_base
   struct PerWindowParams
   {
     ossia::net::parameter_base* scaled_cursor{};
+    ossia::net::parameter_base* gl_cursor{};
     ossia::net::parameter_base* abs_cursor{};
     ossia::net::parameter_base* size_param{};
     ossia::net::parameter_base* pos_param{};
@@ -151,6 +152,14 @@ public:
           pw.scaled_cursor = scale_node->create_parameter(ossia::val_type::VEC2F);
           pw.scaled_cursor->set_domain(ossia::make_domain(0.f, 1.f));
           pw.scaled_cursor->push_value(ossia::vec2f{0.f, 0.f});
+          cursor_node->add_child(std::move(scale_node));
+        }
+        {
+          auto scale_node
+              = std::make_unique<ossia::net::generic_node>("gl", *this, *cursor_node);
+          pw.gl_cursor = scale_node->create_parameter(ossia::val_type::VEC2F);
+          pw.gl_cursor->set_domain(ossia::make_domain(0.f, 1.f));
+          pw.gl_cursor->push_value(ossia::vec2f{0.f, 0.f});
           cursor_node->add_child(std::move(scale_node));
         }
         {
@@ -516,12 +525,16 @@ public:
       // Mouse cursor
       pw.connections.push_back(
           QObject::connect(
-              w, &score::gfx::Window::mouseMove, [&pw, w](QPointF screen, QPointF win) {
+              w, &score::gfx::Window::mouseMove,
+              [&pw, w](const QPointF screen, const QPointF win) {
         auto sz = w->size();
         if(sz.width() > 0 && sz.height() > 0)
         {
           pw.scaled_cursor->push_value(
               ossia::vec2f{float(win.x() / sz.width()), float(win.y() / sz.height())});
+          pw.gl_cursor->push_value(
+              ossia::vec2f{
+                  float(win.x() / sz.width()), 1.f - float(win.y() / sz.height())});
           pw.abs_cursor->push_value(ossia::vec2f{float(win.x()), float(win.y())});
         }
       }));
