@@ -40,6 +40,7 @@ private:
 
   std::vector<Sampler> m_inputSamplers;
   std::vector<Sampler> m_audioSamplers;
+  std::vector<QRhiSampler*> m_blitSamplers;
 
   const Mesh* m_mesh{};
   MeshBuffers m_meshBuffer{};

@@ -238,6 +238,7 @@ void main() { fragColor = texture(blitTexture, v_texcoord); }
           QRhiSampler::ClampToEdge, QRhiSampler::ClampToEdge);
       sampler->setName("SimpleRenderedISFNode::MRT::blitSampler");
       sampler->create();
+      m_blitSamplers.push_back(sampler);
 
       auto pip = score::gfx::buildPipeline(
           renderer, *m_mesh, vertexS, fragmentS, rt, nullptr, nullptr,
@@ -429,6 +430,11 @@ void SimpleRenderedISFNode::release(RenderList& r)
     // texture is deleted elsewhere
   }
   m_audioSamplers.clear();
+  for(auto sampler : m_blitSamplers)
+  {
+    delete sampler;
+  }
+  m_blitSamplers.clear();
 
   delete m_materialUBO;
   m_materialUBO = nullptr;
