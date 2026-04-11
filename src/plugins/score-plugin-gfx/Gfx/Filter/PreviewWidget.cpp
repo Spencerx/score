@@ -267,6 +267,11 @@ public:
     score::gfx::OutputNode::Configuration conf{};
     m_screen = std::make_unique<score::gfx::ScreenNode>(conf, true);
     m_graph.addNode(m_screen.get());
+
+    connect(qApp, &QCoreApplication::aboutToQuit, this, [] {
+      delete g_shaderPreview;
+      g_shaderPreviewScheduledForDeletion = false;
+    });
   }
 
   ~ShaderPreviewManager()
