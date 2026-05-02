@@ -82,13 +82,15 @@ else
   cd "$SDK_DIR"
 
   # Download cmake
-  if [[ ! -d "$SDK_DIR/cmake" ]] ; then
-    if ! command -v cmake >/dev/null 2>&1 ; then
-      echo "CMake not found, installing..."
-      curl -L -0 https://github.com/Kitware/CMake/releases/download/v$CMAKE_VERSION/cmake-$CMAKE_VERSION-windows-x86_64.zip --output cmake.zip
-      unzip -qq cmake.zip
-      mv cmake-$CMAKE_VERSION-windows-x86_64 cmake
+  if ! command -v cmake >/dev/null 2>&1 ; then
+    if [[ -d "$SDK_DIR/cmake" ]] ; then
+      rm -rf "$SDK_DIR/cmake"
     fi
+  
+    echo "CMake not found, installing..."
+    curl -L -0 https://github.com/Kitware/CMake/releases/download/v$CMAKE_VERSION/cmake-$CMAKE_VERSION-windows-x86_64.zip --output cmake.zip
+    unzip -qq cmake.zip
+    mv cmake-$CMAKE_VERSION-windows-x86_64 cmake
   fi
 
   if [[ -d "$SDK_DIR/cmake" ]] ; then
