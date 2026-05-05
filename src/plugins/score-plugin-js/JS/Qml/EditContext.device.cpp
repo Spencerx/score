@@ -254,6 +254,11 @@ void EditJsContext::createDevice(QString name, QString uuid, QJSValue obj)
       JSONWriter wrt{json_doc};
       set.deviceSpecificSettings = prot->makeProtocolSpecificSettings(wrt.toVariant());
     }
+    else
+    {
+      qDebug() << "Cannot create device: missing protocol" << name << uuid;
+      return;
+    }
   }
   else if(var.canConvert<Device::DeviceSettings>())
   {
